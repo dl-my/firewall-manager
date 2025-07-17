@@ -1,0 +1,19 @@
+{"level":"INFO","time":"2025-07-14T16:43:23.886+0800","caller":"runtime/proc.go:283","message":"系统启动成功"}
+{"level":"WARN","time":"2025-07-14T16:43:23.886+0800","caller":"runtime/proc.go:283","message":"这是一个警告"}
+{"level":"ERROR","time":"2025-07-14T16:43:23.887+0800","caller":"runtime/proc.go:283","message":"这是一个错误","stacktrace":"runtime.main\n\tC:/Users/Public/App/Golang/goSDK/go1.24.0/go/src/runtime/proc.go:283"}
+{"level":"INFO","time":"2025-07-14T16:44:09.266+0800","caller":"runtime/proc.go:283","message":"系统启动成功"}
+{"level":"WARN","time":"2025-07-14T16:44:09.267+0800","caller":"runtime/proc.go:283","message":"这是一个警告"}
+{"level":"ERROR","time":"2025-07-14T16:44:09.267+0800","caller":"runtime/proc.go:283","message":"这是一个错误","stacktrace":"runtime.main\n\tC:/Users/Public/App/Golang/goSDK/go1.24.0/go/src/runtime/proc.go:283"}
+{"level":"FATAL","time":"2025-07-14T16:44:09.267+0800","caller":"runtime/proc.go:283","message":"这是一个错误","stacktrace":"runtime.main\n\tC:/Users/Public/App/Golang/goSDK/go1.24.0/go/src/runtime/proc.go:283"}
+{"level":"INFO","time":"2025-07-14T17:34:47.889+0800","caller":"runtime/proc.go:283","message":"系统启动成功"}
+{"level":"WARN","time":"2025-07-14T17:34:47.889+0800","caller":"runtime/proc.go:283","message":"这是一个警告"}
+{"level":"ERROR","time":"2025-07-14T17:34:47.890+0800","caller":"runtime/proc.go:283","message":"这是一个错误","stacktrace":"runtime.main\n\tC:/Users/Public/App/Golang/goSDK/go1.24.0/go/src/runtime/proc.go:283"}
+{"level":"FATAL","time":"2025-07-14T17:34:47.890+0800","caller":"runtime/proc.go:283","message":"这是一个错误","stacktrace":"runtime.main\n\tC:/Users/Public/App/Golang/goSDK/go1.24.0/go/src/runtime/proc.go:283"}
+{"level":"INFO","time":"2025-07-14T17:35:03.850+0800","caller":"runtime/proc.go:283","message":"系统启动成功"}
+{"level":"WARN","time":"2025-07-14T17:35:03.851+0800","caller":"runtime/proc.go:283","message":"这是一个警告"}
+{"level":"ERROR","time":"2025-07-14T17:35:03.851+0800","caller":"runtime/proc.go:283","message":"这是一个错误","stacktrace":"runtime.main\n\tC:/Users/Public/App/Golang/goSDK/go1.24.0/go/src/runtime/proc.go:283"}
+{"level":"INFO","time":"2025-07-14T17:46:15.008+0800","caller":"runtime/proc.go:283","message":"系统启动成功"}
+{"level":"WARN","time":"2025-07-14T17:46:15.008+0800","caller":"runtime/proc.go:283","message":"这是一个警告"}
+{"level":"ERROR","time":"2025-07-14T17:46:15.008+0800","caller":"runtime/proc.go:283","message":"这是一个错误","stacktrace":"runtime.main\n\tC:/Users/Public/App/Golang/goSDK/go1.24.0/go/src/runtime/proc.go:283"}
+{"level":"FATAL","time":"2025-07-14T17:46:15.008+0800","caller":"runtime/proc.go:283","message":"这是一个错误","stacktrace":"runtime.main\n\tC:/Users/Public/App/Golang/goSDK/go1.24.0/go/src/runtime/proc.go:283"}
+{"level":"FATAL","time":"2025-07-14T17:46:31.115+0800","caller":"firewall-manager/main.go:18","message":"服务启动失败","error":"listen tcp: address 8688: missing port in address","stacktrace":"main.main\n\tC:/Users/Public/App/Golang/project/firewall-manager/main.go:18\nruntime.main\n\tC:/Users/Public/App/Golang/goSDK/go1.24.0/go/src/runtime/proc.go:283"}

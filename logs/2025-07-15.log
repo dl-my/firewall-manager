@@ -1,0 +1,1 @@
+{"level":"FATAL","time":"2025-07-15T08:45:18.859+0800","caller":"firewall-manager/main.go:12","message":"自动迁移失败","error":"failed to parse field: SourceIPs, error: unsupported data type: &[]","stacktrace":"main.main\n\tC:/Users/Public/App/Golang/project/firewall-manager/main.go:12\nruntime.main\n\tC:/Users/Public/App/Golang/goSDK/go1.24.0/go/src/runtime/proc.go:283"}

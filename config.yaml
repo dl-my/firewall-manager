@@ -1,0 +1,24 @@
+app:
+  port: 8688
+
+database:
+  driver: mysql
+  host: 8.130.44.1
+  port: 3306
+  username: firewall-manager
+  password: 5211314.
+  name: firewall_manager
+  charset: utf8mb4
+  loc: Local
+  parse_time: true
+
+log:
+  level: info
+  format: json  
+  log_dir: logs
+  show_line: true
+  log_in_console: false
+  max_size: 100
+  max_backups: 7
+  max_age: 30
+  compress: true
