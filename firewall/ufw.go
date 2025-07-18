@@ -176,9 +176,6 @@ func (m *UFWManager) AutoRestoreRules() error {
 	// 加载当前系统规则，避免重复添加
 	for _, r := range savedRules {
 		if !ruleExists(r, m.cache) {
-			zap.L().Info("[ufw] 恢复规则", zap.Int("port", r.Port),
-				zap.String("protocol", r.Protocol), zap.Strings("SourceIPs", r.SourceIPs))
-
 			// 构造 RuleRequest 并添加
 			req := model.RuleRequest(r)
 			if err = m.AddRule(context.Background(), req); err != nil {
@@ -192,6 +189,15 @@ func (m *UFWManager) AutoRestoreRules() error {
 }
 
 func (m *UFWManager) ListRule(ctx context.Context) ([]model.Rule, error) {
+	rules := m.cacheToRules()
+
+	zap.L().Info("[ufw] 查看所有规则",
+		zap.String("ip", utils.GetIP(ctx)),
+		zap.Any("rules", rules))
+	return rules, nil
+}
+
+func (m *UFWManager) cacheToRules() []model.Rule {
 	// key: "port|protocol|action|chain"
 	merged := make(map[string]model.Rule)
 
@@ -214,11 +220,7 @@ func (m *UFWManager) ListRule(ctx context.Context) ([]model.Rule, error) {
 	for _, r := range merged {
 		result = append(result, r)
 	}
-
-	zap.L().Info("[ufw] 查看所有规则",
-		zap.String("ip", utils.GetIP(ctx)),
-		zap.Any("rules", result))
-	return result, nil
+	return result
 }
 
 func (m *UFWManager) AddRule(ctx context.Context, req model.RuleRequest) error {
@@ -308,10 +310,13 @@ func (m *UFWManager) DeleteRule(ctx context.Context, req model.RuleRequest) erro
 			return err
 		}
 
-		zap.L().Info("[ufw] 删除规则成功",
-			zap.String("ip", utils.GetIP(ctx)),
-			zap.Any("rule", singleRule))
-		deletedRules = append(deletedRules, singleRule)
+		if ruleExists(singleRule, m.cache) {
+			zap.L().Info("[ufw] 删除规则成功",
+				zap.String("ip", utils.GetIP(ctx)),
+				zap.Any("rule", singleRule))
+			deletedRules = append(deletedRules, singleRule)
+		}
+
 	}
 
 	m.removeRuleFromCache(deletedRules)
@@ -342,6 +347,18 @@ func (m *UFWManager) removeRuleFromCache(rules []model.Rule) {
 }
 
 func (m *UFWManager) EditRule(ctx context.Context, edit model.EditRuleRequest) error {
+	rule, err := requestToRule(edit.Old)
+	if err != nil {
+		zap.L().Error("[ufw] 转换规则失败", zap.Error(err))
+		return err
+	}
+	for _, ip := range rule.SourceIPs {
+		singleRule := rule
+		singleRule.SourceIPs = []string{ip}
+		if !ruleExists(singleRule, m.cache) {
+			return fmt.Errorf("编辑的规则不存在")
+		}
+	}
 	if err := m.DeleteRule(ctx, edit.Old); err != nil {
 		return err
 	}
@@ -370,10 +387,7 @@ func (m *UFWManager) Type() string {
 }
 
 func (m *UFWManager) saveRulesToFileUnlocked() error {
-	var rules []model.Rule
-	for _, rule := range m.cache {
-		rules = append(rules, rule...)
-	}
+	rules := m.cacheToRules()
 	data, err := json.MarshalIndent(rules, "", "  ")
 	if err != nil {
 		zap.L().Error("Failed to marshal UFW rules")
