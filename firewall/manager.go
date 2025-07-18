@@ -29,7 +29,7 @@ func InitFirewallManager() {
 		zap.L().Error("初始化防火墙失败", zap.Error(err))
 	}
 	setManager(fw)
-	fmt.Println("防火墙初始化成功", zap.String("type", fw.Type()))
+	fmt.Printf("[%s]防火墙初始化成功\n", fw.Type())
 }
 
 // detectFirewallManager 自动检测并返回可用的防火墙管理器

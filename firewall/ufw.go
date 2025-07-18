@@ -21,16 +21,33 @@ var (
 	UFWRulesFile = "ufw_rules.json"
 
 	actionMap = map[string]string{
-		"ACCEPT": "allow",
-		"ALLOW":  "allow",
-		"DROP":   "deny",
-		"DENY":   "deny",
-		"REJECT": "deny",
+		"ACCEPT": "ALLOW",
+		"ALLOW":  "ALLOW",
+		"DROP":   "DENY",
+		"DENY":   "DENY",
+		"REJECT": "DENY",
+	}
+	chainMap = map[string]string{
+		"IN":     "INPUT",
+		"INPUT":  "INPUT",
+		"OUT":    "OUTPUT",
+		"OUTPUT": "OUTPUT",
+		"":       "INPUT",
+	}
+	portMap = map[string]int{
+		"SSH":   22,
+		"HTTP":  80,
+		"HTTPS": 443,
+		"DNS":   53,
+		"SMTP":  25,
+		"POP3":  110,
+		"IMAP":  143,
+		// 可以添加更多常见服务
 	}
 )
 
 type UFWManager struct {
-	rules []model.Rule
+	cache map[int][]model.Rule
 	sync.RWMutex
 }
 
@@ -41,7 +58,9 @@ func UFWAvailable() bool {
 }
 
 func NewUFWManager() (*UFWManager, error) {
-	m := &UFWManager{}
+	m := &UFWManager{
+		cache: make(map[int][]model.Rule),
+	}
 	if err := m.LoadRules(); err != nil {
 		return nil, err
 	}
@@ -63,49 +82,82 @@ func execCommand(cmdStr string) (string, error) {
 }
 
 // 正则表达式以匹配UFW输出格式
-var ufwRuleRegex = regexp.MustCompile(`^\s*\[\s*\d+\]\s+([^\s]+)\s+ALLOW IN\s+([^\s]+)`)
+var ufwV4Regex = regexp.MustCompile(`^\s*\[\s*(\d+)\]\s+(.+?)\s+([A-Z]+)\s+([A-Z]+)\s+((?:Anywhere\s*)|(?:[\d\.]+(?:/\d+)?))\s*$`)
+var portProtoRegex = regexp.MustCompile(`^(\d+)(?:/([a-z]+))?$`)
 
 func (m *UFWManager) LoadRules() error {
+	m.Lock()
+	defer m.Unlock()
+
+	m.cache = make(map[int][]model.Rule) // 确保每次重新加载前清空
+
 	output, err := execCommand("ufw status numbered")
 	if err != nil {
 		return err
 	}
 
-	rules := []model.Rule{}
+	var rules []model.Rule
 	scanner := bufio.NewScanner(strings.NewReader(output))
+
 	for scanner.Scan() {
 		line := scanner.Text()
-		if matches := ufwRuleRegex.FindStringSubmatch(line); len(matches) > 0 {
-			port, err := strconv.Atoi(matches[1])
-			if err != nil {
-				zap.L().Error("[ufw] 解析端口失败", zap.String("line", line))
-				continue
-			}
-			source := matches[4]
-			if source == "Anywhere" {
+		if matches := ufwV4Regex.FindStringSubmatch(line); len(matches) >= 6 {
+			service := matches[2]
+			action := actionMap[strings.ToUpper(matches[3])]
+			chain := chainMap[strings.ToUpper(matches[4])]
+			source := matches[5]
+			if strings.TrimSpace(source) == "Anywhere" {
 				source = "0.0.0.0/0"
 			}
-			rules = append(rules, model.Rule{
+			port, protocol := extractPortAndProtocol(service)
+			r := model.Rule{
 				Port:      port,
-				Protocol:  matches[2],
-				Action:    strings.ToUpper(matches[3]),
-				Chain:     "INPUT",
+				Protocol:  protocol,
+				Action:    action,
+				Chain:     chain,
 				SourceIPs: []string{source},
-			})
+			}
+			m.cache[r.Port] = append(m.cache[r.Port], r)
+			rules = append(rules, r)
 		}
 	}
-	m.Lock()
-	m.rules = rules
-	m.Unlock()
-
 	zap.L().Info("[ufw] 规则已加载", zap.Any("rules", rules))
 	return nil
 }
 
+func extractPortAndProtocol(service string) (int, string) {
+	// 处理标准格式 "端口/协议"
+	if matches := portProtoRegex.FindStringSubmatch(service); len(matches) > 0 {
+		port, err := strconv.Atoi(matches[1])
+		if err != nil {
+			zap.L().Warn("[ufw] 解析端口失败", zap.String("service", service))
+			return 0, ""
+		}
+
+		protocol := matches[2]
+		if protocol == "" {
+			protocol = "tcp" // 默认使用TCP
+		}
+
+		return port, protocol
+	}
+
+	if port, exists := portMap[strings.ToUpper(service)]; exists {
+		return port, "tcp" // 大多数服务默认使用TCP
+	}
+
+	// 处理特殊情况 (如 mDNS, 多播地址等)
+	if strings.Contains(service, "mDNS") {
+		return 5353, "udp"
+	}
+
+	// 无法解析端口，返回0
+	zap.L().Warn("[ufw] 无法解析端口", zap.String("service", service))
+	return 0, ""
+}
+
 // AutoRestoreRules 启动时自动恢复 JSON 文件中的规则
 func (m *UFWManager) AutoRestoreRules() error {
-	m.Lock()
-	defer m.Unlock()
 	if _, err := os.Stat(UFWRulesFile); os.IsNotExist(err) {
 		fmt.Println("[ufw] 未找到规则文件，跳过恢复")
 		return nil
@@ -122,22 +174,16 @@ func (m *UFWManager) AutoRestoreRules() error {
 	}
 
 	// 加载当前系统规则，避免重复添加
-	currentRules, err := m.ListRule(context.Background())
-	if err != nil {
-		return err
-	}
-
 	for _, r := range savedRules {
-		if !ruleExists(r, currentRules) {
+		if !ruleExists(r, m.cache) {
 			zap.L().Info("[ufw] 恢复规则", zap.Int("port", r.Port),
-				zap.String("protocol", r.Protocol), zap.Strings("src", r.SourceIPs))
+				zap.String("protocol", r.Protocol), zap.Strings("SourceIPs", r.SourceIPs))
 
 			// 构造 RuleRequest 并添加
 			req := model.RuleRequest(r)
 			if err = m.AddRule(context.Background(), req); err != nil {
 				zap.L().Error("[ufw] 恢复规则失败", zap.Error(err))
 			}
-			m.rules = append(m.rules, r)
 		}
 	}
 
@@ -146,125 +192,153 @@ func (m *UFWManager) AutoRestoreRules() error {
 }
 
 func (m *UFWManager) ListRule(ctx context.Context) ([]model.Rule, error) {
+	// key: "port|protocol|action|chain"
+	merged := make(map[string]model.Rule)
+
+	for _, rules := range m.cache {
+		for _, r := range rules {
+			key := fmt.Sprintf("%d|%s|%s|%s", r.Port, r.Protocol, r.Action, r.Chain)
+
+			if existing, ok := merged[key]; ok {
+				// 合并 source_ips
+				existing.SourceIPs = append(existing.SourceIPs, r.SourceIPs...)
+				merged[key] = existing
+			} else {
+				merged[key] = r
+			}
+		}
+	}
+
+	// 转回数组
+	result := make([]model.Rule, 0, len(merged))
+	for _, r := range merged {
+		result = append(result, r)
+	}
+
 	zap.L().Info("[ufw] 查看所有规则",
 		zap.String("ip", utils.GetIP(ctx)),
-		zap.Any("rules", m.rules))
-	return append([]model.Rule{}, m.rules...), nil // 返回副本防止数据竞争
+		zap.Any("rules", result))
+	return result, nil
 }
 
 func (m *UFWManager) AddRule(ctx context.Context, req model.RuleRequest) error {
 	m.Lock()
 	defer m.Unlock()
 
-	action, ok := actionMap[strings.ToUpper(req.Action)]
-	if !ok {
-		return fmt.Errorf("不支持的动作: %s", req.Action)
+	rule, err := requestToRule(req)
+	if err != nil {
+		zap.L().Error("[ufw] 转换规则失败", zap.Error(err))
+		return err
 	}
 
-	chain := strings.ToUpper(req.Chain)
-	if chain == "" {
-		chain = "INPUT" // 默认 INPUT
-	}
+	action := strings.ToLower(rule.Action)
+	var addedRules []model.Rule // 记录成功添加的规则
 
-	sourceIPs := req.SourceIPs
-	if len(sourceIPs) == 0 {
-		sourceIPs = []string{"any"}
-	}
-	addedIPs := make([]string, 0, len(sourceIPs))
-	for _, ip := range sourceIPs {
-		singleRule := req
+	for _, ip := range rule.SourceIPs {
+		singleRule := rule
 		singleRule.SourceIPs = []string{ip}
+
 		var cmd string
-		switch chain {
+		switch rule.Chain {
 		case "INPUT":
 			cmd = fmt.Sprintf("ufw %s from %s to any port %d proto %s",
-				action, ip, req.Port, req.Protocol)
+				action, ip, singleRule.Port, singleRule.Protocol)
 		case "OUTPUT":
 			cmd = fmt.Sprintf("ufw %s out to %s port %d proto %s",
-				action, ip, req.Port, req.Protocol)
+				action, ip, singleRule.Port, singleRule.Protocol)
 		default:
-			return fmt.Errorf("UFW 不支持的链: %s", chain)
+			return fmt.Errorf("UFW 不支持的链: %s", singleRule.Chain)
 		}
+
 		if out, err := execCommand(cmd); err != nil {
-			zap.L().Error("[ufw] 添加规则失败", zap.String("cmd", cmd), zap.String("output", out))
+			zap.L().Error("[ufw] 添加规则失败",
+				zap.String("cmd", cmd),
+				zap.String("output", out),
+				zap.Error(err))
 			return err
 		}
-		zap.L().Info("[ufw] 添加规则成功", zap.String("ip", utils.GetIP(ctx)), zap.Any("rule", singleRule))
-		addedIPs = append(addedIPs, ip)
+
+		if !ruleExists(singleRule, m.cache) {
+			zap.L().Info("[ufw] 添加规则成功",
+				zap.String("ip", utils.GetIP(ctx)),
+				zap.Any("rule", singleRule))
+			addedRules = append(addedRules, singleRule)
+		}
 	}
-	m.rules = append(m.rules, model.Rule{
-		Action:    strings.ToUpper(req.Action),
-		Chain:     req.Chain,
-		Port:      req.Port,
-		Protocol:  req.Protocol,
-		SourceIPs: addedIPs,
-	})
+
+	m.cache[rule.Port] = append(m.cache[rule.Port], addedRules...)
 	return m.saveRulesToFileUnlocked()
 }
 
+// TODO 系统自带规则以服务命名而非端口,需做特殊判断
 func (m *UFWManager) DeleteRule(ctx context.Context, req model.RuleRequest) error {
 	m.Lock()
 	defer m.Unlock()
 
-	action, ok := actionMap[strings.ToUpper(req.Action)]
-	if !ok {
-		return fmt.Errorf("不支持的动作: %s", req.Action)
+	rule, err := requestToRule(req)
+	if err != nil {
+		zap.L().Error("[ufw] 转换规则失败", zap.Error(err))
+		return err
 	}
 
-	chain := strings.ToUpper(req.Chain)
-	if chain == "" {
-		chain = "INPUT" // 默认 INPUT
-	}
+	action := strings.ToLower(rule.Action)
+	var deletedRules []model.Rule // 记录成功添加的规则
 
-	sourceIPs := req.SourceIPs
-	if len(sourceIPs) == 0 {
-		sourceIPs = []string{"any"}
-	}
-	deletedIPs := make([]string, 0, len(sourceIPs))
-	for _, ip := range sourceIPs {
-		singleRule := req
+	for _, ip := range rule.SourceIPs {
+		singleRule := rule
 		singleRule.SourceIPs = []string{ip}
+
 		var cmd string
-		switch chain {
+		switch rule.Chain {
 		case "INPUT":
 			cmd = fmt.Sprintf("ufw delete %s from %s to any port %d proto %s",
-				action, ip, req.Port, req.Protocol)
+				action, ip, singleRule.Port, singleRule.Protocol)
 		case "OUTPUT":
 			cmd = fmt.Sprintf("ufw delete %s out to %s port %d proto %s",
-				action, ip, req.Port, req.Protocol)
+				action, ip, singleRule.Port, singleRule.Protocol)
 		default:
-			return fmt.Errorf("UFW 不支持的链: %s", chain)
+			return fmt.Errorf("UFW 不支持的链: %s", singleRule.Chain)
 		}
+
 		if out, err := execCommand(cmd); err != nil {
-			zap.L().Error("[ufw] 删除规则失败", zap.String("cmd", cmd), zap.String("output", out))
+			zap.L().Error("[ufw] 删除规则失败",
+				zap.String("cmd", cmd),
+				zap.String("output", out),
+				zap.Error(err))
 			return err
 		}
-		zap.L().Info("[ufw] 删除规则成功", zap.String("ip", utils.GetIP(ctx)), zap.Any("rule", singleRule))
-		deletedIPs = append(deletedIPs, ip)
+
+		zap.L().Info("[ufw] 删除规则成功",
+			zap.String("ip", utils.GetIP(ctx)),
+			zap.Any("rule", singleRule))
+		deletedRules = append(deletedRules, singleRule)
 	}
-	m.removeRuleFromCache(req, deletedIPs)
+
+	m.removeRuleFromCache(deletedRules)
 	return m.saveRulesToFileUnlocked()
 }
 
-func (m *UFWManager) removeRuleFromCache(req model.RuleRequest, ips []string) {
-	updatedRules := make([]model.Rule, 0, len(m.rules))
+func (m *UFWManager) removeRuleFromCache(rules []model.Rule) {
+	for _, r := range rules {
+		port := r.Port
+		if cachedRules, ok := m.cache[port]; ok {
+			newRules := make([]model.Rule, 0, len(cachedRules))
 
-	for _, r := range m.rules {
-		if r.Port == req.Port &&
-			strings.EqualFold(r.Protocol, req.Protocol) &&
-			strings.EqualFold(r.Action, strings.ToUpper(req.Action)) {
-
-			deletedIPs := RemoveAll(req.SourceIPs, ips)
-			if len(deletedIPs) > 0 {
-				r.SourceIPs = deletedIPs
-				updatedRules = append(updatedRules, r)
+			for _, cr := range cachedRules {
+				// 判断是否为要删除的规则（port, protocol, action, chain, source_ips 都匹配）
+				if !isSameRule(cr, r) {
+					newRules = append(newRules, cr)
+				}
 			}
-		} else {
-			updatedRules = append(updatedRules, r)
+
+			// 如果删空了，直接删除这个 key
+			if len(newRules) == 0 {
+				delete(m.cache, port)
+			} else {
+				m.cache[port] = newRules
+			}
 		}
 	}
-
-	m.rules = updatedRules
 }
 
 func (m *UFWManager) EditRule(ctx context.Context, edit model.EditRuleRequest) error {
@@ -281,6 +355,13 @@ func (m *UFWManager) Reload() error {
 		zap.L().Error("[ufw] 重载失败: ", zap.Error(err), zap.String("输出", string(out)))
 		return err
 	}
+	// 重载系统配置及自定义规则
+	//err = m.LoadRules()
+	//if err != nil {
+	//	zap.L().Error("[ufw] 重载失败: ", zap.Error(err))
+	//	return err
+	//}
+	//return m.AutoRestoreRules()
 	return m.LoadRules()
 }
 
@@ -289,7 +370,11 @@ func (m *UFWManager) Type() string {
 }
 
 func (m *UFWManager) saveRulesToFileUnlocked() error {
-	data, err := json.MarshalIndent(m.rules, "", "  ")
+	var rules []model.Rule
+	for _, rule := range m.cache {
+		rules = append(rules, rule...)
+	}
+	data, err := json.MarshalIndent(rules, "", "  ")
 	if err != nil {
 		zap.L().Error("Failed to marshal UFW rules")
 		return err
@@ -297,12 +382,21 @@ func (m *UFWManager) saveRulesToFileUnlocked() error {
 	return os.WriteFile(UFWRulesFile, data, 0644)
 }
 
-func ruleExists(r model.Rule, current []model.Rule) bool {
-	for _, cr := range current {
-		if r.Port == cr.Port && strings.EqualFold(r.Protocol, cr.Protocol) &&
-			strings.EqualFold(r.Action, cr.Action) && sameStringSlice(r.SourceIPs, cr.SourceIPs) {
-			return true
+func ruleExists(r model.Rule, current map[int][]model.Rule) bool {
+	if rules, ok := current[r.Port]; ok {
+		for _, rule := range rules {
+			if isSameRule(r, rule) {
+				return true
+			}
 		}
+	}
+	return false
+}
+
+func isSameRule(a, b model.Rule) bool {
+	if a.Port == b.Port && strings.EqualFold(a.Protocol, b.Protocol) &&
+		strings.EqualFold(a.Action, b.Action) && sameStringSlice(a.SourceIPs, b.SourceIPs) {
+		return true
 	}
 	return false
 }
@@ -319,19 +413,24 @@ func sameStringSlice(a, b []string) bool {
 	return true
 }
 
-func RemoveAll[T comparable](src, toRemove []T) []T {
-	// 1. 把 toRemove 元素放进 map
-	removeSet := make(map[T]struct{}, len(toRemove))
-	for _, v := range toRemove {
-		removeSet[v] = struct{}{}
+func requestToRule(req model.RuleRequest) (model.Rule, error) {
+	action, ok := actionMap[strings.ToUpper(req.Action)]
+	if !ok {
+		return model.Rule{}, fmt.Errorf("不支持的动作: %s", req.Action)
 	}
-
-	// 2. 遍历 src，只保留不在 removeSet 的元素
-	var result []T
-	for _, v := range src {
-		if _, found := removeSet[v]; !found {
-			result = append(result, v)
-		}
+	chain, ok := chainMap[strings.ToUpper(req.Chain)]
+	if !ok {
+		return model.Rule{}, fmt.Errorf("不支持的链: %s", req.Chain)
 	}
-	return result
+	sourceIPs := req.SourceIPs
+	if len(sourceIPs) == 0 {
+		sourceIPs = []string{"any"}
+	}
+	return model.Rule{
+		Action:    action,
+		Chain:     chain,
+		Port:      req.Port,
+		Protocol:  strings.ToLower(req.Protocol),
+		SourceIPs: sourceIPs,
+	}, nil
 }
