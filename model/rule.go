@@ -12,6 +12,11 @@ type Rule struct {
 	//UpdatedAt time.Time `json:"updated_at" gorm:"autoUpdateTime"` // 更新时间（自动更新）
 }
 
+type FWRule struct {
+	Type string `json:"type"`
+	Rule Rule   `json:"rule"`
+}
+
 type IptablesRule struct {
 	Table string      `json:"table"`
 	Rule  RuleRequest `json:"rule"`

@@ -3,8 +3,8 @@ package firewall
 import (
 	"context"
 	"encoding/json"
+	"firewall-manager/common/utils"
 	"firewall-manager/model"
-	"firewall-manager/utils"
 	"fmt"
 	"github.com/coreos/go-iptables/iptables"
 	"go.uber.org/zap"
@@ -19,7 +19,7 @@ const IptablesRulesFile = "iptables_rules.json"
 
 type IptablesManager struct {
 	ipt   *iptables.IPTables
-	cache map[int][]model.Rule // key: action，例如 "ACCEPT"
+	cache map[int][]model.Rule // key: port 例如 3306
 	mu    sync.RWMutex
 }
 
@@ -416,15 +416,12 @@ func parseRuleLine(line string) *model.Rule {
 		}
 	}
 	r.SourceIPs = srcIPs
-	if r.Port == 0 && r.Protocol == "" {
+	if r.Port == 0 || r.Protocol == "" || r.Protocol == "icmp" || r.Action == "" || r.Chain == "" {
 		// 这类无效规则直接过滤
 		return nil
 	}
-	if r.Chain == "" || r.Action == "" {
-		return nil
-	}
 	if r.Action == "CHECKSUM" && r.Chain == "POSTROUTING" && r.Protocol == "udp" && r.Port == 68 {
-		zap.L().Warn("跳过系统自动生成的 CHECKSUM DHCP 规则", zap.Any("rule", r))
+		//zap.L().Warn("跳过系统自动生成的 CHECKSUM DHCP 规则", zap.Any("rule", r))
 		return nil
 	}
 	return &r

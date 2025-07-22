@@ -1,9 +1,9 @@
 package api
 
 import (
+	"firewall-manager/common/utils"
 	"firewall-manager/firewall"
 	"firewall-manager/model"
-	"firewall-manager/utils"
 	"github.com/gin-gonic/gin"
 	"net/http"
 )

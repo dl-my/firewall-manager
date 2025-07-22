@@ -37,6 +37,9 @@ func detectFirewallManager() (FirewallManager, error) {
 	if UFWAvailable() {
 		return NewUFWManager()
 	}
+	if FWAvailable() {
+		return NewFWManager()
+	}
 	if IPTAvailable() {
 		return NewIptablesManager()
 	}

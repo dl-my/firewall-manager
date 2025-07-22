@@ -5,8 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"firewall-manager/common/common"
+	"firewall-manager/common/utils"
 	"firewall-manager/model"
-	"firewall-manager/utils"
 	"fmt"
 	"go.uber.org/zap"
 	"os"
@@ -17,35 +18,6 @@ import (
 	"sync"
 )
 
-var (
-	UFWRulesFile = "ufw_rules.json"
-
-	actionMap = map[string]string{
-		"ACCEPT": "ALLOW",
-		"ALLOW":  "ALLOW",
-		"DROP":   "DENY",
-		"DENY":   "DENY",
-		"REJECT": "DENY",
-	}
-	chainMap = map[string]string{
-		"IN":     "INPUT",
-		"INPUT":  "INPUT",
-		"OUT":    "OUTPUT",
-		"OUTPUT": "OUTPUT",
-		"":       "INPUT",
-	}
-	portMap = map[string]int{
-		"SSH":   22,
-		"HTTP":  80,
-		"HTTPS": 443,
-		"DNS":   53,
-		"SMTP":  25,
-		"POP3":  110,
-		"IMAP":  143,
-		// 可以添加更多常见服务
-	}
-)
-
 type UFWManager struct {
 	cache map[int][]model.Rule
 	sync.RWMutex
@@ -53,8 +25,18 @@ type UFWManager struct {
 
 // 检查ufw是否可用
 func UFWAvailable() bool {
-	_, err := exec.LookPath("ufw")
-	return err == nil
+	if _, err := exec.LookPath("ufw"); err != nil {
+		return false // 程序不存在
+	}
+	cmd := exec.Command("ufw", "status")
+	cmd.Env = append(os.Environ(), "LANG=C") // 强制英文输出
+
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	// "Status: active" 表示已启用
+	return strings.Contains(string(out), "Status: active")
 }
 
 func NewUFWManager() (*UFWManager, error) {
@@ -66,7 +48,7 @@ func NewUFWManager() (*UFWManager, error) {
 	}
 	// 启动时自动恢复 JSON 中的规则
 	if err := m.AutoRestoreRules(); err != nil {
-		zap.L().Warn("[ufw] 启动时规则恢复失败", zap.Error(err))
+		zap.L().Error("[ufw] 启动时规则恢复失败", zap.Error(err))
 	}
 	return m, nil
 }
@@ -103,8 +85,8 @@ func (m *UFWManager) LoadRules() error {
 		line := scanner.Text()
 		if matches := ufwV4Regex.FindStringSubmatch(line); len(matches) >= 6 {
 			service := matches[2]
-			action := actionMap[strings.ToUpper(matches[3])]
-			chain := chainMap[strings.ToUpper(matches[4])]
+			action := common.UFWActionMap[strings.ToUpper(matches[3])]
+			chain := common.UFWChainMap[strings.ToUpper(matches[4])]
 			source := matches[5]
 			if strings.TrimSpace(source) == "Anywhere" {
 				source = "0.0.0.0/0"
@@ -126,11 +108,14 @@ func (m *UFWManager) LoadRules() error {
 }
 
 func extractPortAndProtocol(service string) (int, string) {
+	if port, exists := common.ServiceToPortMap[strings.ToUpper(service)]; exists {
+		service = port
+	}
 	// 处理标准格式 "端口/协议"
 	if matches := portProtoRegex.FindStringSubmatch(service); len(matches) > 0 {
 		port, err := strconv.Atoi(matches[1])
 		if err != nil {
-			zap.L().Warn("[ufw] 解析端口失败", zap.String("service", service))
+			zap.L().Warn("解析服务端口失败", zap.String("service", service))
 			return 0, ""
 		}
 
@@ -140,10 +125,6 @@ func extractPortAndProtocol(service string) (int, string) {
 		}
 
 		return port, protocol
-	}
-
-	if port, exists := portMap[strings.ToUpper(service)]; exists {
-		return port, "tcp" // 大多数服务默认使用TCP
 	}
 
 	// 处理特殊情况 (如 mDNS, 多播地址等)
@@ -158,12 +139,12 @@ func extractPortAndProtocol(service string) (int, string) {
 
 // AutoRestoreRules 启动时自动恢复 JSON 文件中的规则
 func (m *UFWManager) AutoRestoreRules() error {
-	if _, err := os.Stat(UFWRulesFile); os.IsNotExist(err) {
+	if _, err := os.Stat(common.UFWRulesFile); os.IsNotExist(err) {
 		fmt.Println("[ufw] 未找到规则文件，跳过恢复")
 		return nil
 	}
 
-	data, err := os.ReadFile(UFWRulesFile)
+	data, err := os.ReadFile(common.UFWRulesFile)
 	if err != nil {
 		return err
 	}
@@ -393,7 +374,7 @@ func (m *UFWManager) saveRulesToFileUnlocked() error {
 		zap.L().Error("Failed to marshal UFW rules")
 		return err
 	}
-	return os.WriteFile(UFWRulesFile, data, 0644)
+	return os.WriteFile(common.UFWRulesFile, data, 0644)
 }
 
 func ruleExists(r model.Rule, current map[int][]model.Rule) bool {
@@ -428,11 +409,11 @@ func sameStringSlice(a, b []string) bool {
 }
 
 func requestToRule(req model.RuleRequest) (model.Rule, error) {
-	action, ok := actionMap[strings.ToUpper(req.Action)]
+	action, ok := common.UFWActionMap[strings.ToUpper(req.Action)]
 	if !ok {
 		return model.Rule{}, fmt.Errorf("不支持的动作: %s", req.Action)
 	}
-	chain, ok := chainMap[strings.ToUpper(req.Chain)]
+	chain, ok := common.UFWChainMap[strings.ToUpper(req.Chain)]
 	if !ok {
 		return model.Rule{}, fmt.Errorf("不支持的链: %s", req.Chain)
 	}
