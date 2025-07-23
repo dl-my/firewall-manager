@@ -37,6 +37,8 @@ type AppConfig struct {
 	DB Database `mapstructure:"database"`
 
 	Log LogConfig `mapstructure:"log"`
+
+	FirewallType string `mapstructure:"firewall_type"`
 }
 
 var GlobalConfig AppConfig

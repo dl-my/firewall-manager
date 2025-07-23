@@ -14,6 +14,7 @@ COPY . .
 # 交叉编译为 Linux 可执行文件（确保与目标系统架构一致）
 # 设置环境变量：目标 OS 为 Linux，架构为 amd64（根据实际调整）
 ENV CGO_ENABLED=0 \
+    GOPROXY=https://goproxy.cn,direct \
     GOOS=linux \
     GOARCH=amd64
 

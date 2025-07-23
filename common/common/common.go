@@ -1,8 +1,9 @@
 package common
 
 var (
-	UFWRulesFile = "ufw_rules.json"
-	FWRulesFile  = "firewalld_rules.json"
+	UFWRulesFile      = "ufw_rules.json"
+	FWRulesFile       = "firewalld_rules.json"
+	IptablesRulesFile = "iptables_rules.json"
 
 	FWCMD     = "firewall-cmd"
 	PERMANENT = "--permanent"
@@ -11,6 +12,14 @@ var (
 	SERVICE  = "service"
 	RICHRULE = "rich-rule"
 	IPV4     = "ipv4"
+	Add      = "add"
+	Delete   = "delete"
+
+	IptablesTable = "filter"
+
+	DefaultIP           = "0.0.0.0/0"
+	IptablesPath        = "iptables"
+	IptablesRestorePath = "iptables-restore"
 
 	UFWActionMap = map[string]string{
 		"ACCEPT": "ALLOW",

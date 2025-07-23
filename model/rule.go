@@ -18,8 +18,8 @@ type FWRule struct {
 }
 
 type IptablesRule struct {
-	Table string      `json:"table"`
-	Rule  RuleRequest `json:"rule"`
+	Rule Rule   `json:"rule"`
+	Raw  string `json:"raw"`
 }
 
 // 用于Add/Delete/Edit请求

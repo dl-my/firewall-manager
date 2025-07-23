@@ -22,3 +22,5 @@ log:
   max_backups: 7
   max_age: 30
   compress: true
+
+firewall_type: iptables
