@@ -4,6 +4,8 @@ FROM golang:1.24-alpine AS builder
 # 设置工作目录
 WORKDIR /app
 
+ENV GOPROXY=https://goproxy.cn,direct
+
 # 复制 go.mod 和 go.sum 并下载依赖（利用 Docker 缓存）
 COPY go.mod go.sum ./
 RUN go mod download
@@ -14,7 +16,6 @@ COPY . .
 # 交叉编译为 Linux 可执行文件（确保与目标系统架构一致）
 # 设置环境变量：目标 OS 为 Linux，架构为 amd64（根据实际调整）
 ENV CGO_ENABLED=0 \
-    GOPROXY=https://goproxy.cn,direct \
     GOOS=linux \
     GOARCH=amd64
 
