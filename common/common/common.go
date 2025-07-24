@@ -1,6 +1,7 @@
 package common
 
 var (
+	IPKey             = "operator_ip"
 	UFWRulesFile      = "ufw_rules.json"
 	FWRulesFile       = "firewalld_rules.json"
 	IptablesRulesFile = "iptables_rules.json"

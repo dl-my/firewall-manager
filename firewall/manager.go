@@ -28,7 +28,9 @@ var (
 func InitFirewallManager(firewallType string) {
 	fw, err := detectFirewallManager(firewallType)
 	if err != nil {
-		logs.Fatal("初始化防火墙失败", zap.Error(err))
+		logs.Error("初始化防火墙失败", zap.Error(err))
+		panic(fmt.Sprintf("初始化防火墙失败: %v\n", err))
+		//logs.Fatal("初始化防火墙失败", zap.Error(err))
 	}
 	setManager(fw)
 	fmt.Printf("[%s]防火墙初始化成功\n", fw.Type())

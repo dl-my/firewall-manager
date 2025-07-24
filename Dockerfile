@@ -24,13 +24,7 @@ RUN go build -o firewall-manager ./main.go
 
 
 # 第二阶段：运行阶段
-FROM centos:7
-
-# 安装 iptables、firewalld、ufw
-RUN yum install -y epel-release && \
-    yum update -y && \
-    yum install -y iptables iptables-services firewalld ufw && \
-    yum clean all
+FROM debian:bullseye-slim
 
 # 设置工作目录
 WORKDIR /root/
@@ -40,6 +34,9 @@ COPY --from=builder /app/firewall-manager .
 
 # 复制项目其他必要文件（如配置文件、静态资源等，根据实际需求添加）
 COPY config.yaml ./
+
+# 安装基础调试工具（可选）
+RUN apt-get update && apt-get install -y bash dbus && apt-get clean
 
 # 暴露应用端口（根据项目实际端口修改）
 EXPOSE 8688

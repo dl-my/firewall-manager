@@ -40,7 +40,7 @@ func IptablesParseRules(lines []string) []model.IptablesRule {
 			Protocol:  strings.ToLower(matches[4]),
 			Port:      port,
 			Action:    strings.ToUpper(matches[6]),
-			Chain:     strings.ToUpper(matches[1]),
+			Chain:     matches[1],
 			SourceIPs: []string{sourceIP},
 		}
 

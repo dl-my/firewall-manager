@@ -1,6 +1,7 @@
 package api
 
 import (
+	"firewall-manager/common/common"
 	"firewall-manager/common/utils"
 	"firewall-manager/firewall"
 	"firewall-manager/model"
@@ -16,7 +17,7 @@ func AddFirewallRule(c *gin.Context) {
 	}
 
 	// 从 gin 上下文获取
-	ip, _ := c.Get("ip")
+	ip, _ := c.Get(common.IPKey)
 	ctx := utils.NewContextWithIP(c.Request.Context(), ip.(string))
 
 	fw := firewall.GetManager()
@@ -37,7 +38,7 @@ func DelFirewallRule(c *gin.Context) {
 	}
 
 	// 从 gin 上下文获取
-	ip, _ := c.Get("ip")
+	ip, _ := c.Get(common.IPKey)
 	ctx := utils.NewContextWithIP(c.Request.Context(), ip.(string))
 
 	fw := firewall.GetManager()
@@ -58,7 +59,7 @@ func EditFirewallRule(c *gin.Context) {
 	}
 
 	// 从 gin 上下文获取
-	ip, _ := c.Get("ip")
+	ip, _ := c.Get(common.IPKey)
 	ctx := utils.NewContextWithIP(c.Request.Context(), ip.(string))
 
 	fw := firewall.GetManager()
@@ -73,7 +74,7 @@ func EditFirewallRule(c *gin.Context) {
 
 func ListFirewallRule(c *gin.Context) {
 	// 从 gin 上下文获取
-	//ip, _ := c.Get("ip")
+	//ip, _ := c.Get(common.IPKey)
 	//ctx := utils.NewContextWithIP(c.Request.Context(), ip.(string))
 
 	fw := firewall.GetManager()
