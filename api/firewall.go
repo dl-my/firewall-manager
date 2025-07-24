@@ -73,11 +73,11 @@ func EditFirewallRule(c *gin.Context) {
 
 func ListFirewallRule(c *gin.Context) {
 	// 从 gin 上下文获取
-	ip, _ := c.Get("ip")
-	ctx := utils.NewContextWithIP(c.Request.Context(), ip.(string))
+	//ip, _ := c.Get("ip")
+	//ctx := utils.NewContextWithIP(c.Request.Context(), ip.(string))
 
 	fw := firewall.GetManager()
-	rules, err := fw.ListRule(ctx)
+	rules, err := fw.ListRule()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
