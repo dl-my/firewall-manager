@@ -23,8 +23,14 @@ ENV CGO_ENABLED=0 \
 RUN go build -o firewall-manager ./main.go
 
 
-# 第二阶段：运行阶段（使用轻量级基础镜像，无需 Go 环境）
-FROM alpine:latest
+# 第二阶段：运行阶段
+FROM centos:7
+
+# 安装 iptables、firewalld、ufw
+RUN yum install -y epel-release && \
+    yum update -y && \
+    yum install -y iptables iptables-services firewalld ufw && \
+    yum clean all
 
 # 设置工作目录
 WORKDIR /root/
