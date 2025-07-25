@@ -4,6 +4,7 @@ import (
 	"firewall-manager/common/common"
 	"firewall-manager/model"
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -57,4 +58,15 @@ func IndexKey(r model.Rule) string {
 		b.WriteString(common.DefaultIP)
 	}
 	return b.String()
+}
+
+// 检查IP是否合法
+func IsValidIP(addr string) bool {
+	if net.ParseIP(addr) != nil {
+		return true
+	}
+	if _, _, err := net.ParseCIDR(addr); err == nil {
+		return true
+	}
+	return false
 }

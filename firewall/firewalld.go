@@ -131,6 +131,12 @@ func (m *FWManager) AddRule(ctx context.Context, req model.RuleRequest) error {
 		singleRule := rule
 		singleRule.SourceIPs = []string{ip}
 
+		if !utils.IsValidIP(singleRule.SourceIPs[0]) {
+			logs.ErrorCtx(ctx, "[firewalld] 添加规则失败，无效的IP地址",
+				zap.Any("rule", singleRule))
+			return fmt.Errorf("[firewalld] 添加规则失败，无效的IP地址: %s", ip)
+		}
+
 		if m.ruleExists(singleRule) {
 			continue
 		}
@@ -183,6 +189,12 @@ func (m *FWManager) DeleteRule(ctx context.Context, req model.RuleRequest) error
 	for _, ip := range rule.SourceIPs {
 		singleRule := rule
 		singleRule.SourceIPs = []string{ip}
+
+		if !utils.IsValidIP(singleRule.SourceIPs[0]) {
+			logs.ErrorCtx(ctx, "[firewalld] 删除规则失败，无效的IP地址",
+				zap.Any("rule", singleRule))
+			return fmt.Errorf("[firewalld] 删除规则失败，无效的IP地址: %s", ip)
+		}
 
 		fwType := m.getRuleType(singleRule)
 

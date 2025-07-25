@@ -9,7 +9,6 @@ import (
 	"firewall-manager/model"
 	"fmt"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 	"os"
 	"os/exec"
 	"strings"
@@ -74,25 +73,36 @@ func (m *IptablesManager) autoRestoreRules() error {
 	}
 
 	var savedRules []model.IptablesRule
+	var addedRules []model.IptablesRule
+	var rulesBatch []string
 	if err = json.Unmarshal(data, &savedRules); err != nil {
 		return err
 	}
 
-	g, ctx := errgroup.WithContext(context.Background())
-	g.SetLimit(5) // 控制并发数
-
 	// 加载当前系统规则，避免重复添加
-	// TODO 数组批量添加
 	for _, r := range savedRules {
 		if m.ruleExists(r.Rule) {
 			continue
 		}
-		g.Go(func() error {
-			return m.AddRule(ctx, model.RuleRequest(r.Rule))
-		})
+		rulesBatch = append(rulesBatch, r.Raw)
+		addedRules = append(addedRules, r)
 	}
-	if err := g.Wait(); err != nil {
-		logs.Warn("[iptables] 恢复规则部分失败", zap.Error(err))
+	// 如果没有新规则需要添加，直接返回
+	if len(rulesBatch) == 0 {
+		return nil
+	}
+
+	if err := applyRulesWithIptablesRestore(rulesBatch); err != nil {
+		logs.Warn("[iptables] 恢复规则失败", zap.Error(err))
+		return err
+	}
+
+	// 更新缓存
+	m.Lock()
+	defer m.Unlock()
+	for _, r := range addedRules {
+		m.addToCache(r)
+		logs.Info("[iptables] 恢复规则成功", zap.Any("rule", r.Rule))
 	}
 	logs.Info("[iptables] 规则恢复完成")
 	return nil
@@ -107,6 +117,12 @@ func (m *IptablesManager) AddRule(ctx context.Context, req model.RuleRequest) er
 	for _, ip := range rule.SourceIPs {
 		singleRule := rule
 		singleRule.SourceIPs = []string{ip}
+
+		if !utils.IsValidIP(singleRule.SourceIPs[0]) {
+			logs.ErrorCtx(ctx, "[iptables] 添加规则失败，无效的IP地址",
+				zap.Any("rule", singleRule))
+			return fmt.Errorf("[iptables] 添加规则失败，无效的IP地址: %s", ip)
+		}
 
 		if m.ruleExists(singleRule) {
 			continue
@@ -147,6 +163,12 @@ func (m *IptablesManager) DeleteRule(ctx context.Context, req model.RuleRequest)
 	for _, ip := range rule.SourceIPs {
 		singleRule := rule
 		singleRule.SourceIPs = []string{ip}
+
+		if !utils.IsValidIP(singleRule.SourceIPs[0]) {
+			logs.ErrorCtx(ctx, "[iptables] 删除规则失败，无效的IP地址",
+				zap.Any("rule", singleRule))
+			return fmt.Errorf("[iptables] 删除规则失败，无效的IP地址: %s", ip)
+		}
 
 		if !m.ruleExists(singleRule) {
 			continue

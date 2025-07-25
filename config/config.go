@@ -34,8 +34,6 @@ type AppConfig struct {
 		Port int `mapstructure:"port"`
 	}
 
-	DB Database `mapstructure:"database"`
-
 	Log LogConfig `mapstructure:"log"`
 
 	FirewallType string `mapstructure:"firewall_type"`

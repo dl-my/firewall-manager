@@ -17,8 +17,7 @@ func Run(port int) {
 	// 注册路由
 	registerRoutes(r)
 
-	// 启动服务（可以从配置读取端口）
-
+	// 启动服务
 	if err := r.Run(fmt.Sprintf(":%d", port)); err != nil {
 		zap.L().Error("服务启动失败", zap.Error(err))
 	}

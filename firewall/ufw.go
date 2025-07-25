@@ -190,6 +190,12 @@ func (m *UFWManager) applyRules(ctx context.Context, req model.RuleRequest, meth
 		singleRule := rule
 		singleRule.SourceIPs = []string{ip}
 
+		if !utils.IsValidIP(singleRule.SourceIPs[0]) {
+			logs.ErrorCtx(ctx, fmt.Sprintf("[ufw] %s规则失败，无效的IP地址", method),
+				zap.Any("rule", singleRule))
+			return fmt.Errorf("[ufw] %s规则失败，无效的IP地址: %s", method, ip)
+		}
+
 		exists := m.ruleExists(singleRule)
 		if (method == common.Add && exists) || (method == common.Delete && !exists) {
 			continue
