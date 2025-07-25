@@ -13,7 +13,7 @@ type Manager interface {
 	AddRule(ctx context.Context, rule model.RuleRequest) error
 	DeleteRule(ctx context.Context, rule model.RuleRequest) error
 	EditRule(ctx context.Context, rule model.EditRuleRequest) error
-	ListRule() ([]model.Rule, error)
+	ListRule() []model.Rule
 	SaveRules() error
 	Reload() error
 	Type() string
@@ -30,10 +30,9 @@ func InitFirewallManager(firewallType string) {
 	if err != nil {
 		logs.Error("初始化防火墙失败", zap.Error(err))
 		panic(fmt.Sprintf("初始化防火墙失败: %v\n", err))
-		//logs.Fatal("初始化防火墙失败", zap.Error(err))
 	}
 	setManager(fw)
-	fmt.Printf("[%s]防火墙初始化成功\n", fw.Type())
+	logs.Info(fmt.Sprintf("[%s] 防火墙初始化成功", fw.Type()))
 }
 
 // detectFirewallManager 自动检测并返回可用的防火墙管理器
@@ -62,7 +61,7 @@ func detectFirewallManager(firewallType string) (Manager, error) {
 		if fw.check() {
 			return fw.init()
 		}
-		return nil, fmt.Errorf("%s 不可用", firewallType)
+		return nil, fmt.Errorf("[%s] 不可用", firewallType)
 	}
 
 	// 否则自动检测

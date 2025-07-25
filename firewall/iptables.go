@@ -92,7 +92,7 @@ func (m *IptablesManager) autoRestoreRules() error {
 		})
 	}
 	if err := g.Wait(); err != nil {
-		logs.Error("[iptables] 恢复规则部分失败", zap.Error(err))
+		logs.Warn("[iptables] 恢复规则部分失败", zap.Error(err))
 	}
 	logs.Info("[iptables] 规则恢复完成")
 	return nil
@@ -123,7 +123,7 @@ func (m *IptablesManager) AddRule(ctx context.Context, req model.RuleRequest) er
 	}
 
 	if err := applyRulesWithIptablesRestore(rulesBatch); err != nil {
-		logs.Error("批量添加规则失败", zap.String("ip", utils.GetIP(ctx)), zap.Error(err))
+		logs.ErrorCtx(ctx, "[iptables] 批量添加规则失败", zap.Error(err))
 		return err
 	}
 
@@ -132,7 +132,7 @@ func (m *IptablesManager) AddRule(ctx context.Context, req model.RuleRequest) er
 	defer m.Unlock()
 	for _, r := range addedRules {
 		m.addToCache(r)
-		logs.Info("添加规则成功", zap.String("ip", utils.GetIP(ctx)), zap.Any("rule", r.Rule))
+		logs.InfoCtx(ctx, "[iptables] 添加规则成功", zap.Any("rule", r.Rule))
 	}
 
 	return nil
@@ -164,7 +164,7 @@ func (m *IptablesManager) DeleteRule(ctx context.Context, req model.RuleRequest)
 
 	// 使用 iptables-restore 批量删除
 	if err := applyRulesWithIptablesRestore(deleteBatch); err != nil {
-		logs.Error("批量删除规则失败", zap.String("ip", utils.GetIP(ctx)), zap.Error(err))
+		logs.ErrorCtx(ctx, "[iptables] 批量删除规则失败", zap.Error(err))
 		return err
 	}
 
@@ -175,7 +175,7 @@ func (m *IptablesManager) DeleteRule(ctx context.Context, req model.RuleRequest)
 
 	// 日志
 	for _, r := range deletedRules {
-		logs.Info("删除规则成功", zap.String("ip", utils.GetIP(ctx)), zap.Any("rule", r.Rule))
+		logs.InfoCtx(ctx, "[iptables] 删除规则成功", zap.Any("rule", r.Rule))
 	}
 
 	return nil
@@ -187,28 +187,33 @@ func (m *IptablesManager) EditRule(ctx context.Context, edit model.EditRuleReque
 		singleRule := rule
 		singleRule.SourceIPs = []string{ip}
 		if !m.ruleExists(singleRule) {
-			return fmt.Errorf("编辑规则不存在: %+v", singleRule)
+			return fmt.Errorf("[iptables] 编辑规则不存在: %+v", singleRule)
 		}
 	}
 	if err := m.DeleteRule(ctx, edit.Old); err != nil {
 		return err
 	}
-	logs.Info("[iptables] 编辑规则",
-		zap.String("操作者ip", utils.GetIP(ctx)),
+	logs.InfoCtx(ctx, "[iptables] 编辑规则",
 		zap.Any("oldRule", edit.Old),
 		zap.Any("newRule", edit.New))
 	return m.AddRule(ctx, edit.New)
 }
 
-func (m *IptablesManager) ListRule() ([]model.Rule, error) {
+func (m *IptablesManager) ListRule() []model.Rule {
 	allRules := m.cacheToRules()
-	return allRules, nil
+	return allRules
 }
 
 func (m *IptablesManager) SaveRules() error {
 	m.Lock()
 	defer m.Unlock()
-	return m.saveRulesToFileUnlocked()
+	if err := m.saveRulesToFileUnlocked(); err != nil {
+		return err
+	}
+	logs.Info("[iptables] 规则保存成功",
+		zap.String("iptables_file", "./rules.v4"),
+		zap.String("json_file", common.IptablesRulesFile))
+	return nil
 }
 
 func (m *IptablesManager) Type() string {
@@ -218,7 +223,7 @@ func (m *IptablesManager) Type() string {
 func (m *IptablesManager) Reload() error {
 	cmd := exec.Command("iptables-restore", "./rules.v4")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		logs.Error("[iptables] 重载失败", zap.Error(err), zap.String("输出", string(out)))
+		logs.Error("[iptables] 重载失败", zap.Error(err), zap.String("output", string(out)))
 		return err
 	}
 	return m.loadRules()
@@ -312,7 +317,7 @@ func (m *IptablesManager) saveRulesToFileUnlocked() error {
 func fetchSystemRules() ([]string, error) {
 	out, err := exec.Command("iptables", "-S").Output()
 	if err != nil {
-		return nil, fmt.Errorf("加载iptables规则失败: %v", err)
+		return nil, fmt.Errorf("[iptables] 加载规则失败: %v", err)
 	}
 	return strings.Split(string(out), "\n"), nil
 }

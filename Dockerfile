@@ -23,8 +23,40 @@ ENV CGO_ENABLED=0 \
 RUN go build -o firewall-manager ./main.go
 
 
-# 第二阶段：运行阶段
-FROM debian:bullseye-slim
+# 第二阶段：运行阶段（centos7）
+FROM centos:7
+
+# 安装 iptables、firewalld、ufw
+RUN rm -rf /etc/yum.repos.d/* && \
+    curl -o /etc/yum.repos.d/CentOS-Base.repo https://mirrors.aliyun.com/repo/Centos-7.repo && \
+    yum clean all && \
+    yum makecache fast && \
+    yum install -y epel-release && \
+    yum update -y && \
+    yum install -y iptables iptables-services firewalld ufw && \
+    yum clean all
+
+# 第二阶段：运行阶段（Ubuntu）
+#FROM ubuntu:20.04
+#
+# 避免安装交互卡住（例如 tzdata 提示）
+#ENV DEBIAN_FRONTEND=noninteractive
+#
+# 更新软件源并安装 iptables、firewalld、ufw
+#RUN sed -i 's@http://.*.ubuntu.com@http://mirrors.aliyun.com@g' /etc/apt/sources.list && \
+#    apt-get update && \
+#    apt-get install -y --no-install-recommends \
+#        bash \
+#        curl \
+#        iptables \
+#        firewalld \
+#        ufw \
+#        dbus && \
+#    apt-get clean && \
+#    rm -rf /var/lib/apt/lists/*
+
+
+
 
 # 设置工作目录
 WORKDIR /root/
@@ -34,9 +66,6 @@ COPY --from=builder /app/firewall-manager .
 
 # 复制项目其他必要文件（如配置文件、静态资源等，根据实际需求添加）
 COPY config.yaml ./
-
-# 安装基础调试工具（可选）
-RUN apt-get update && apt-get install -y bash dbus && apt-get clean
 
 # 暴露应用端口（根据项目实际端口修改）
 EXPOSE 8688

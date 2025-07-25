@@ -96,13 +96,15 @@ func (m *UFWManager) autoRestoreRules() error {
 			// 构造 RuleRequest 并添加
 			req := model.RuleRequest(r)
 			if err = m.AddRule(context.Background(), req); err != nil {
-				logs.Error("[ufw] 恢复规则失败", zap.Error(err))
+				logs.Warn("[ufw] 恢复规则失败", zap.Error(err))
 			}
 		}
 	}
 	logs.Info("[ufw] 规则已加载", zap.Any("rules", savedRules))
 	return nil
 }
+
+//TODO: 失败回滚
 
 func (m *UFWManager) AddRule(ctx context.Context, req model.RuleRequest) error {
 	return m.applyRules(ctx, req, common.Add)
@@ -124,7 +126,7 @@ func (m *UFWManager) EditRule(ctx context.Context, edit model.EditRuleRequest) e
 		singleRule := rule
 		singleRule.SourceIPs = []string{ip}
 		if !m.ruleExists(singleRule) {
-			return fmt.Errorf("编辑的规则不存在")
+			return fmt.Errorf("[ufw] 编辑的规则不存在")
 		}
 	}
 	if err := m.DeleteRule(ctx, edit.Old); err != nil {
@@ -133,9 +135,9 @@ func (m *UFWManager) EditRule(ctx context.Context, edit model.EditRuleRequest) e
 	return m.AddRule(ctx, edit.New)
 }
 
-func (m *UFWManager) ListRule() ([]model.Rule, error) {
+func (m *UFWManager) ListRule() []model.Rule {
 	rules := m.cacheToRules()
-	return rules, nil
+	return rules
 }
 
 func (m *UFWManager) Reload() error {
@@ -195,7 +197,7 @@ func (m *UFWManager) applyRules(ctx context.Context, req model.RuleRequest, meth
 
 		args, err := buildUFWCommandArgs(singleRule, action, method)
 		if err != nil {
-			return fmt.Errorf("build ufw args failed: %w", err)
+			return fmt.Errorf("[ufw] build ufw args failed: %w", err)
 		}
 
 		if out, err := exec.Command("ufw", args...).CombinedOutput(); err != nil {
@@ -223,7 +225,7 @@ func (m *UFWManager) applyRules(ctx context.Context, req model.RuleRequest, meth
 		m.removeRuleFromCache(processedRules)
 	}
 
-	logs.InfoCtx(ctx, fmt.Sprintf("%s规则成功", method), zap.Any("rules", processedRules))
+	logs.InfoCtx(ctx, fmt.Sprintf("[ufw] %s规则成功", method), zap.Any("rules", processedRules))
 	return nil
 }
 
@@ -325,7 +327,7 @@ func buildUFWCommandArgs(rule model.Rule, action, method string) ([]string, erro
 				fmt.Sprint(rule.Port), "proto", rule.Protocol)
 		}
 	default:
-		return nil, fmt.Errorf("UFW 不支持的链: %s", rule.Chain)
+		return nil, fmt.Errorf("[ufw] 不支持的链: %s", rule.Chain)
 	}
 	return args, nil
 }
@@ -333,11 +335,11 @@ func buildUFWCommandArgs(rule model.Rule, action, method string) ([]string, erro
 func requestToRule(req model.RuleRequest) (model.Rule, error) {
 	action, ok := common.UFWActionMap[strings.ToUpper(req.Action)]
 	if !ok {
-		return model.Rule{}, fmt.Errorf("不支持的动作: %s", req.Action)
+		return model.Rule{}, fmt.Errorf("[ufw] 不支持的动作: %s", req.Action)
 	}
 	chain, ok := common.UFWChainMap[strings.ToUpper(req.Chain)]
 	if !ok {
-		return model.Rule{}, fmt.Errorf("不支持的链: %s", req.Chain)
+		return model.Rule{}, fmt.Errorf("[ufw] 不支持的链: %s", req.Chain)
 	}
 	sourceIPs := req.SourceIPs
 	if len(sourceIPs) == 0 {

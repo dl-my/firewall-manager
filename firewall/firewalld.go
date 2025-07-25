@@ -113,7 +113,7 @@ func (m *FWManager) autoRestoreRules() error {
 		})
 	}
 	if err := g.Wait(); err != nil {
-		logs.Error("[firewalld] 恢复规则部分失败", zap.Error(err))
+		logs.Warn("[firewalld] 恢复规则部分失败", zap.Error(err))
 	}
 	logs.Info("[firewalld] 规则恢复完成")
 	return nil
@@ -200,7 +200,7 @@ func (m *FWManager) DeleteRule(ctx context.Context, req model.RuleRequest) error
 		case common.RICHRULE:
 			cmdErr = runFirewallCmd("--remove-rich-rule", buildRichRuleString(singleRule), common.PERMANENT)
 		default:
-			cmdErr = fmt.Errorf("不支持的规则类型: %s", fwType)
+			cmdErr = fmt.Errorf("[firewalld] 不支持的规则类型: %s", fwType)
 		}
 
 		if cmdErr != nil {
@@ -227,7 +227,7 @@ func (m *FWManager) EditRule(ctx context.Context, edit model.EditRuleRequest) er
 		singleRule := rule
 		singleRule.SourceIPs = []string{ip}
 		if !m.ruleExists(singleRule) {
-			return fmt.Errorf("编辑规则不存在: %+v", singleRule)
+			return fmt.Errorf("[firewalld] 编辑的规则不存在: %+v", singleRule)
 		}
 	}
 	if err := m.DeleteRule(ctx, edit.Old); err != nil {
@@ -236,9 +236,9 @@ func (m *FWManager) EditRule(ctx context.Context, edit model.EditRuleRequest) er
 	return m.AddRule(ctx, edit.New)
 }
 
-func (m *FWManager) ListRule() ([]model.Rule, error) {
+func (m *FWManager) ListRule() []model.Rule {
 	rules := m.cacheToRules()
-	return rules, nil
+	return rules
 }
 
 func (m *FWManager) Reload() error {
@@ -285,7 +285,7 @@ func (m *FWManager) loadPort() ([]model.FWRule, error) {
 	cmd := exec.Command(common.FWCMD, "--list-ports")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("加载普通规则失败: %v, 输出: %s", err, string(output))
+		return nil, fmt.Errorf("[firewalld] 加载普通规则失败: %v, 输出: %s", err, string(output))
 	}
 
 	ports := strings.Fields(strings.TrimSpace(string(output)))
@@ -315,7 +315,7 @@ func (m *FWManager) loadService() ([]model.FWRule, error) {
 	cmd := exec.Command(common.FWCMD, "--list-services")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("加载服务规则失败: %v, 输出: %s", err, string(output))
+		return nil, fmt.Errorf("[firewalld] 加载服务规则失败: %v, 输出: %s", err, string(output))
 	}
 
 	service := strings.Fields(strings.TrimSpace(string(output)))
@@ -342,7 +342,7 @@ func (m *FWManager) loadRichRule() ([]model.FWRule, error) {
 	cmd := exec.Command(common.FWCMD, "--list-rich-rules")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("加载 rich rules 失败: %v, 输出: %s", err, string(output))
+		return nil, fmt.Errorf("[firewalld] 加载 rich rules 失败: %v, 输出: %s", err, string(output))
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")

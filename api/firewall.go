@@ -2,24 +2,25 @@ package api
 
 import (
 	"firewall-manager/common/common"
+	"firewall-manager/common/logs"
 	"firewall-manager/common/utils"
 	"firewall-manager/firewall"
 	"firewall-manager/model"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 	"net/http"
 )
 
 func AddFirewallRule(c *gin.Context) {
 	var rule model.RuleRequest
-	if err := c.ShouldBindJSON(&rule); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
 	// 从 gin 上下文获取
 	ip, _ := c.Get(common.IPKey)
 	ctx := utils.NewContextWithIP(c.Request.Context(), ip.(string))
-
+	if err := c.ShouldBindJSON(&rule); err != nil {
+		logs.ErrorCtx(ctx, "添加规则解析失败", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	fw := firewall.GetManager()
 	err := fw.AddRule(ctx, rule)
 	if err != nil {
@@ -32,14 +33,14 @@ func AddFirewallRule(c *gin.Context) {
 
 func DelFirewallRule(c *gin.Context) {
 	var rule model.RuleRequest
-	if err := c.ShouldBindJSON(&rule); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
 	// 从 gin 上下文获取
 	ip, _ := c.Get(common.IPKey)
 	ctx := utils.NewContextWithIP(c.Request.Context(), ip.(string))
+	if err := c.ShouldBindJSON(&rule); err != nil {
+		logs.ErrorCtx(ctx, "删除规则解析失败", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	fw := firewall.GetManager()
 	err := fw.DeleteRule(ctx, rule)
@@ -53,14 +54,14 @@ func DelFirewallRule(c *gin.Context) {
 
 func EditFirewallRule(c *gin.Context) {
 	var rule model.EditRuleRequest
-	if err := c.ShouldBindJSON(&rule); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
 	// 从 gin 上下文获取
 	ip, _ := c.Get(common.IPKey)
 	ctx := utils.NewContextWithIP(c.Request.Context(), ip.(string))
+	if err := c.ShouldBindJSON(&rule); err != nil {
+		logs.ErrorCtx(ctx, "编辑规则解析失败", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	fw := firewall.GetManager()
 	err := fw.EditRule(ctx, rule)
@@ -73,16 +74,12 @@ func EditFirewallRule(c *gin.Context) {
 }
 
 func ListFirewallRule(c *gin.Context) {
-	// 从 gin 上下文获取
-	//ip, _ := c.Get(common.IPKey)
-	//ctx := utils.NewContextWithIP(c.Request.Context(), ip.(string))
-
 	fw := firewall.GetManager()
-	rules, err := fw.ListRule()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+	// 从 gin 上下文获取
+	ip, _ := c.Get(common.IPKey)
+	ctx := utils.NewContextWithIP(c.Request.Context(), ip.(string))
+	rules := fw.ListRule()
+	logs.InfoCtx(ctx, "获取防火墙规则成功", zap.Any("rules", rules))
 
 	c.JSON(http.StatusOK, gin.H{"rules": rules})
 }
