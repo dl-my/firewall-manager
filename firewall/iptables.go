@@ -287,6 +287,8 @@ func (m *IptablesManager) removeRuleFromCache(rules []model.IptablesRule) {
 
 func (m *IptablesManager) cacheToRules() []model.Rule {
 	merged := make(map[string]model.Rule)
+	m.RLock()
+	defer m.RUnlock()
 
 	for _, rules := range m.cache {
 		for _, r := range rules {

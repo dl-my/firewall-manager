@@ -291,6 +291,8 @@ func (m *UFWManager) removeRuleFromCache(rules []model.Rule) {
 func (m *UFWManager) cacheToRules() []model.Rule {
 	// key: "port|protocol|action|chain"
 	merged := make(map[string]model.Rule)
+	m.RLock()
+	defer m.RUnlock()
 
 	for _, rules := range m.cache {
 		for _, r := range rules {
