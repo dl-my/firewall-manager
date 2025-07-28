@@ -28,7 +28,7 @@ func AddFirewallRule(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Rule added"})
+	c.JSON(http.StatusOK, gin.H{"message": "Rule add success"})
 }
 
 func DelFirewallRule(c *gin.Context) {
@@ -49,7 +49,7 @@ func DelFirewallRule(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Rule del"})
+	c.JSON(http.StatusOK, gin.H{"message": "Rule del success"})
 }
 
 func EditFirewallRule(c *gin.Context) {
@@ -70,7 +70,7 @@ func EditFirewallRule(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Rule edit"})
+	c.JSON(http.StatusOK, gin.H{"message": "Rule edit success"})
 }
 
 func ListFirewallRule(c *gin.Context) {
