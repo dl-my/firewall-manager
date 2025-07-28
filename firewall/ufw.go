@@ -132,7 +132,13 @@ func (m *UFWManager) EditRule(ctx context.Context, edit model.EditRuleRequest) e
 	if err := m.DeleteRule(ctx, edit.Old); err != nil {
 		return err
 	}
-	return m.AddRule(ctx, edit.New)
+	if err := m.AddRule(ctx, edit.New); err != nil {
+		return err
+	}
+	logs.InfoCtx(ctx, "[iptables] 编辑规则",
+		zap.Any("oldRule", edit.Old),
+		zap.Any("newRule", edit.New))
+	return nil
 }
 
 func (m *UFWManager) ListRule() []model.Rule {

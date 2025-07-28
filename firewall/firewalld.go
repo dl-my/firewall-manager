@@ -245,7 +245,13 @@ func (m *FWManager) EditRule(ctx context.Context, edit model.EditRuleRequest) er
 	if err := m.DeleteRule(ctx, edit.Old); err != nil {
 		return err
 	}
-	return m.AddRule(ctx, edit.New)
+	if err := m.AddRule(ctx, edit.New); err != nil {
+		return err
+	}
+	logs.InfoCtx(ctx, "[iptables] 编辑规则",
+		zap.Any("oldRule", edit.Old),
+		zap.Any("newRule", edit.New))
+	return nil
 }
 
 func (m *FWManager) ListRule() []model.Rule {

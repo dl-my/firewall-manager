@@ -215,10 +215,13 @@ func (m *IptablesManager) EditRule(ctx context.Context, edit model.EditRuleReque
 	if err := m.DeleteRule(ctx, edit.Old); err != nil {
 		return err
 	}
+	if err := m.AddRule(ctx, edit.New); err != nil {
+		return err
+	}
 	logs.InfoCtx(ctx, "[iptables] 编辑规则",
 		zap.Any("oldRule", edit.Old),
 		zap.Any("newRule", edit.New))
-	return m.AddRule(ctx, edit.New)
+	return nil
 }
 
 func (m *IptablesManager) ListRule() []model.Rule {
