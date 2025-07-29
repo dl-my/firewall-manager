@@ -30,7 +30,6 @@ func NewRuleCache[T RuleGetter]() *RuleCache[T] {
 	}
 }
 
-// TODO action/chain 大小写不同合并ip
 func (r *RuleCache[T]) Add(rule T, key string) {
 	r.Lock()
 	defer r.Unlock()

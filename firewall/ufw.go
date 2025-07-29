@@ -101,16 +101,12 @@ func (m *UFWManager) autoRestoreRules() error {
 	return nil
 }
 
-//TODO: 失败回滚
-
 func (m *UFWManager) AddRule(ctx context.Context, req model.RuleRequest) error {
 	return m.applyRules(ctx, req, common.Add)
-	//return m.saveRulesToFileUnlocked()
 }
 
 func (m *UFWManager) DeleteRule(ctx context.Context, req model.RuleRequest) error {
 	return m.applyRules(ctx, req, common.Delete)
-	//return m.saveRulesToFileUnlocked()
 }
 
 func (m *UFWManager) EditRule(ctx context.Context, edit model.EditRuleRequest) error {
@@ -214,81 +210,6 @@ func (m *UFWManager) applyRules(ctx context.Context, req model.RuleRequest, meth
 	logs.InfoCtx(ctx, fmt.Sprintf("[ufw] %s规则成功", method), zap.Any("rules", processedRules))
 	return nil
 }
-
-/*func (m *UFWManager) saveRulesToFileUnlocked() error {
-	rules := m.cacheToRules()
-	data, err := json.MarshalIndent(rules, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(common.UFWRulesFile, data, 0644)
-}
-
-func (m *UFWManager) ruleExists(r model.Rule) bool {
-	m.RLock()
-	defer m.RUnlock()
-	_, ok := m.index[utils.IndexKey(r)]
-	return ok
-}
-
-func (m *UFWManager) addToCache(rule model.Rule) {
-	port := rule.Port
-	m.cache[port] = append(m.cache[port], rule)
-	m.index[utils.IndexKey(rule)] = struct{}{}
-}
-
-func (m *UFWManager) removeRuleFromCache(rules []model.Rule) {
-	for _, r := range rules {
-		port := r.Port
-		if cachedRules, ok := m.cache[port]; ok {
-			newRules := make([]model.Rule, 0, len(cachedRules))
-
-			for _, cr := range cachedRules {
-				// 判断是否为要删除的规则（port, protocol, action, chain, source_ips 都匹配）
-				if !utils.IsSameRule(cr, r) {
-					newRules = append(newRules, cr)
-				} else {
-					delete(m.index, utils.IndexKey(r))
-				}
-			}
-
-			// 如果删空了，直接删除这个 key
-			if len(newRules) == 0 {
-				delete(m.cache, port)
-			} else {
-				m.cache[port] = newRules
-			}
-		}
-	}
-}
-
-func (m *UFWManager) cacheToRules() []model.Rule {
-	// key: "port|protocol|action|chain"
-	merged := make(map[string]model.Rule)
-	m.RLock()
-	defer m.RUnlock()
-
-	for _, rules := range m.cache {
-		for _, r := range rules {
-			key := fmt.Sprintf("%d|%s|%s|%s", r.Port, r.Protocol, r.Action, r.Chain)
-
-			if existing, ok := merged[key]; ok {
-				// 合并 source_ips
-				existing.SourceIPs = append(existing.SourceIPs, r.SourceIPs...)
-				merged[key] = existing
-			} else {
-				merged[key] = r
-			}
-		}
-	}
-
-	// 转回数组
-	result := make([]model.Rule, 0, len(merged))
-	for _, r := range merged {
-		result = append(result, r)
-	}
-	return result
-}*/
 
 func buildUFWCommandArgs(rule model.Rule, action, method string) ([]string, error) {
 	ip := rule.SourceIPs[0]

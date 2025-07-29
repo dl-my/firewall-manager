@@ -79,7 +79,6 @@ func (m *FWManager) loadRules() error {
 	return nil
 }
 
-// TODO
 func (m *FWManager) autoRestoreRules() error {
 	if _, err := os.Stat(common.FWRulesFile); os.IsNotExist(err) {
 		logs.Warn("[firewalld] 未找到规则文件，跳过恢复")
