@@ -50,7 +50,7 @@ func IndexKey(r model.Rule) string {
 	b.WriteString(fmt.Sprintf("%d|%s|%s|%s|", r.Port,
 		strings.ToLower(r.Protocol),
 		strings.ToLower(r.Action),
-		strings.ToLower(r.Chain),
+		r.Chain,
 	))
 	if len(r.SourceIPs) > 0 && r.SourceIPs[0] != "" {
 		b.WriteString(r.SourceIPs[0])

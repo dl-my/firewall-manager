@@ -10,7 +10,6 @@ import (
 	"firewall-manager/model"
 	"fmt"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 	"os"
 	"os/exec"
 	"strconv"
@@ -19,8 +18,7 @@ import (
 )
 
 type FWManager struct {
-	cache map[int][]model.FWRule
-	index map[string]struct{}
+	cache *RuleCache[model.FWRule]
 	sync.RWMutex
 }
 
@@ -42,10 +40,10 @@ func FWAvailable() bool {
 	return strings.TrimSpace(out.String()) == "running"
 }
 
+// NewFWManager 初始化 Firewalld 管理器
 func NewFWManager() (*FWManager, error) {
 	m := &FWManager{
-		cache: make(map[int][]model.FWRule),
-		index: make(map[string]struct{}),
+		cache: NewRuleCache[model.FWRule](),
 	}
 	if err := m.loadRules(); err != nil {
 		logs.Error("[firewalld] 加载规则失败", zap.Error(err))
@@ -62,8 +60,7 @@ func (m *FWManager) loadRules() error {
 	m.Lock()
 	defer m.Unlock()
 
-	m.cache = make(map[int][]model.FWRule) // 确保每次重新加载前清空
-	m.index = make(map[string]struct{})
+	m.cache = NewRuleCache[model.FWRule]() // 确保每次重新加载前清空
 
 	loaders := []func() ([]model.FWRule, error){
 		m.loadPort, m.loadService, m.loadRichRule,
@@ -75,14 +72,14 @@ func (m *FWManager) loadRules() error {
 			return err
 		}
 		for _, r := range rules {
-			m.cache[r.Rule.Port] = append(m.cache[r.Rule.Port], r)
-			m.index[utils.IndexKey(r.Rule)] = struct{}{}
+			m.cache.Add(r, utils.IndexKey(r.Rule))
 		}
 	}
-	logs.Info("[firewalld] 规则已加载", zap.Any("rules", m.cacheToRules()))
+	logs.Info("[firewalld] 规则已加载", zap.Any("rules", m.cache.ToRules()))
 	return nil
 }
 
+// TODO
 func (m *FWManager) autoRestoreRules() error {
 	if _, err := os.Stat(common.FWRulesFile); os.IsNotExist(err) {
 		logs.Warn("[firewalld] 未找到规则文件，跳过恢复")
@@ -99,163 +96,109 @@ func (m *FWManager) autoRestoreRules() error {
 		return err
 	}
 
-	g, ctx := errgroup.WithContext(context.Background())
-	g.SetLimit(5) // 控制并发数
-
 	// 加载当前系统规则，避免重复添加
 	for _, r := range savedRules {
-		rule := r
-		if m.ruleExists(rule) {
-			continue
+		if !m.cache.Exists(utils.IndexKey(r)) {
+			// 构造 RuleRequest 并添加
+			req := model.RuleRequest(r)
+			if err = m.AddRule(context.Background(), req); err != nil {
+				logs.Warn("[firewalld] 恢复规则失败", zap.Error(err))
+			}
 		}
-		g.Go(func() error {
-			return m.AddRule(ctx, model.RuleRequest(rule))
-		})
-	}
-	if err := g.Wait(); err != nil {
-		logs.Warn("[firewalld] 恢复规则部分失败", zap.Error(err))
 	}
 	logs.Info("[firewalld] 规则恢复完成")
 	return nil
 }
 
 func (m *FWManager) AddRule(ctx context.Context, req model.RuleRequest) error {
-	m.Lock()
-	defer m.Unlock()
-
-	rule := model.Rule(req)
-
-	var addedRules []model.FWRule
-
-	for _, ip := range rule.SourceIPs {
-		singleRule := rule
-		singleRule.SourceIPs = []string{ip}
-
-		if !utils.IsValidIP(singleRule.SourceIPs[0]) {
-			logs.ErrorCtx(ctx, "[firewalld] 添加规则失败，无效的IP地址",
-				zap.Any("rule", singleRule))
-			return fmt.Errorf("[firewalld] 添加规则失败，无效的IP地址: %s", ip)
-		}
-
-		if m.ruleExists(singleRule) {
-			continue
-		}
-		var fwType string
-		if service := strings.ToLower(utils.GetServiceByPort(singleRule.Port, singleRule.Protocol)); service != "" {
-			fwType = common.SERVICE
-			if err := runFirewallCmd("--add-service", service, common.PERMANENT); err != nil {
-				logs.ErrorCtx(ctx, "[firewalld] 添加服务规则失败",
-					zap.Any("rule", singleRule),
-					zap.String("规则类型", fwType),
-					zap.Error(err))
-				return err
-			}
-		} else {
-			fwType = common.RICHRULE
-			if err := runFirewallCmd("--add-rich-rule", buildRichRuleString(singleRule), common.PERMANENT); err != nil {
-				logs.ErrorCtx(ctx, "[firewalld] 添加规则失败",
-					zap.Any("rule", singleRule),
-					zap.String("规则类型", fwType),
-					zap.Error(err))
-				return err
-			}
-		}
-
-		addedRules = append(addedRules, model.FWRule{Rule: singleRule, Type: fwType})
-		m.index[utils.IndexKey(singleRule)] = struct{}{}
-		logs.InfoCtx(ctx, "[firewalld] 添加规则成功",
-			zap.Any("rule", singleRule),
-			zap.String("规则类型", fwType))
-	}
-
-	if len(addedRules) > 0 {
-		if err := runFirewallCmd("--reload"); err != nil {
-			return err
-		}
-		m.cache[rule.Port] = append(m.cache[rule.Port], addedRules...)
-	}
-	return nil
-	//return m.saveRulesToFileUnlocked()
+	return m.applyRules(ctx, req, common.Add)
 }
 
 func (m *FWManager) DeleteRule(ctx context.Context, req model.RuleRequest) error {
-	m.Lock()
-	defer m.Unlock()
+	return m.applyRules(ctx, req, common.Delete)
+}
 
+func (m *FWManager) applyRules(ctx context.Context, req model.RuleRequest, method string) error {
 	rule := model.Rule(req)
-
-	var deletedRules []model.FWRule
+	var processedRules []model.FWRule
 
 	for _, ip := range rule.SourceIPs {
 		singleRule := rule
 		singleRule.SourceIPs = []string{ip}
+		var cmdErr error
 
 		if !utils.IsValidIP(singleRule.SourceIPs[0]) {
-			logs.ErrorCtx(ctx, "[firewalld] 删除规则失败，无效的IP地址",
-				zap.Any("rule", singleRule))
 			return fmt.Errorf("[firewalld] 删除规则失败，无效的IP地址: %s", ip)
 		}
 
 		fwType := m.getRuleType(singleRule)
+		key := utils.IndexKey(singleRule)
+		exists := m.cache.Exists(key)
 
-		if !m.ruleExists(singleRule) || fwType == "" {
+		if (method == common.Add && exists) || (method == common.Delete && !exists && fwType == "") {
 			continue
 		}
 
-		var cmdErr error
-		switch fwType {
-		case common.PORT:
-			cmdErr = runFirewallCmd("--remove-port", fmt.Sprintf("%d/%s", singleRule.Port, singleRule.Protocol), common.PERMANENT)
-		case common.SERVICE:
-			service := strings.ToLower(utils.GetServiceByPort(singleRule.Port, singleRule.Protocol))
-			cmdErr = runFirewallCmd("--remove-service", service, common.PERMANENT)
-		case common.RICHRULE:
-			cmdErr = runFirewallCmd("--remove-rich-rule", buildRichRuleString(singleRule), common.PERMANENT)
-		default:
-			cmdErr = fmt.Errorf("[firewalld] 不支持的规则类型: %s", fwType)
+		if method == common.Add {
+			// 判断规则类型并执行命令
+			if service := strings.ToLower(utils.GetServiceByPort(rule.Port, rule.Protocol)); service != "" {
+				fwType = common.SERVICE
+				cmdErr = runFirewallCmd("--add-service", service, common.PERMANENT)
+			} else {
+				fwType = common.RICHRULE
+				cmdErr = runFirewallCmd("--add-rich-rule", buildRichRuleString(singleRule), common.PERMANENT)
+			}
+		} else {
+			switch fwType {
+			case common.PORT:
+				cmdErr = runFirewallCmd("--remove-port", fmt.Sprintf("%d/%s", singleRule.Port, singleRule.Protocol), common.PERMANENT)
+			case common.SERVICE:
+				service := strings.ToLower(utils.GetServiceByPort(singleRule.Port, singleRule.Protocol))
+				cmdErr = runFirewallCmd("--remove-service", service, common.PERMANENT)
+			case common.RICHRULE:
+				cmdErr = runFirewallCmd("--remove-rich-rule", buildRichRuleString(singleRule), common.PERMANENT)
+			default:
+				cmdErr = fmt.Errorf("[firewalld] 不支持的规则类型: %s", fwType)
+			}
 		}
 
 		if cmdErr != nil {
 			return cmdErr
 		}
 
-		deletedRules = append(deletedRules, model.FWRule{Rule: singleRule, Type: fwType})
-		logs.InfoCtx(ctx, "[firewalld] 删除规则成功",
-			zap.Any("rule", singleRule),
-			zap.String("规则类型", fwType))
+		fwRule := model.FWRule{Rule: singleRule, Type: fwType}
+		processedRules = append(processedRules, fwRule)
+	}
+
+	if len(processedRules) == 0 {
+		return nil
+	}
+
+	// 修改缓存（只在需要时加锁）
+	m.Lock()
+	defer m.Unlock()
+	if method == common.Add {
+		for _, r := range processedRules {
+			m.cache.Add(r, utils.IndexKey(r.Rule))
+		}
+	} else {
+		m.cache.Remove(processedRules)
 	}
 
 	if err := runFirewallCmd("--reload"); err != nil {
 		return err
 	}
-	m.removeRuleFromCache(deletedRules)
+
+	logs.InfoCtx(ctx, fmt.Sprintf("[firewalld] %s规则成功", method), zap.Any("rules", processedRules))
 	return nil
-	//return m.saveRulesToFileUnlocked()
 }
 
 func (m *FWManager) EditRule(ctx context.Context, edit model.EditRuleRequest) error {
-	rule := model.Rule(edit.Old)
-	for _, ip := range rule.SourceIPs {
-		singleRule := rule
-		singleRule.SourceIPs = []string{ip}
-		if !m.ruleExists(singleRule) {
-			return fmt.Errorf("[firewalld] 编辑的规则不存在: %+v", singleRule)
-		}
-	}
-	if err := m.DeleteRule(ctx, edit.Old); err != nil {
-		return err
-	}
-	if err := m.AddRule(ctx, edit.New); err != nil {
-		return err
-	}
-	logs.InfoCtx(ctx, "[iptables] 编辑规则",
-		zap.Any("oldRule", edit.Old),
-		zap.Any("newRule", edit.New))
-	return nil
+	return m.cache.EditRuleGeneric(ctx, edit, m.DeleteRule, m.AddRule, m.Type())
 }
 
 func (m *FWManager) ListRule() []model.Rule {
-	rules := m.cacheToRules()
+	rules := m.cache.ToRules()
 	return rules
 }
 
@@ -281,20 +224,11 @@ func (m *FWManager) Type() string {
 func (m *FWManager) SaveRules() error {
 	m.RLock()
 	defer m.RUnlock()
-	if err := m.saveRulesToFileUnlocked(); err != nil {
+	if err := m.cache.saveRulesToFileUnlocked(common.FWRulesFile); err != nil {
 		logs.Error("[firewalld] 保存规则失败", zap.Error(err))
 		return err
 	}
 	return nil
-}
-
-func (m *FWManager) saveRulesToFileUnlocked() error {
-	rules := m.cacheToRules()
-	data, err := json.MarshalIndent(rules, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(common.FWRulesFile, data, 0644)
 }
 
 func (m *FWManager) loadPort() ([]model.FWRule, error) {
@@ -375,67 +309,9 @@ func (m *FWManager) loadRichRule() ([]model.FWRule, error) {
 	return rules, nil
 }
 
-func (m *FWManager) removeRuleFromCache(rules []model.FWRule) {
-	for _, r := range rules {
-		port := r.Rule.Port
-		if cachedRules, ok := m.cache[port]; ok {
-			newRules := make([]model.FWRule, 0, len(cachedRules))
-
-			for _, cr := range cachedRules {
-				// 判断是否为要删除的规则（port, protocol, action, chain, source_ips 都匹配）
-				if !utils.IsSameRule(r.Rule, cr.Rule) {
-					newRules = append(newRules, cr)
-				} else {
-					delete(m.index, utils.IndexKey(cr.Rule))
-				}
-			}
-
-			// 如果删空了，直接删除这个 key
-			if len(newRules) == 0 {
-				delete(m.cache, port)
-			} else {
-				m.cache[port] = newRules
-			}
-		}
-	}
-}
-
-func (m *FWManager) cacheToRules() []model.Rule {
-	// key: "port|protocol|action|chain"
-	merged := make(map[string]model.Rule)
-	m.RLock()
-	defer m.RUnlock()
-
-	for _, rules := range m.cache {
-		for _, r := range rules {
-			key := fmt.Sprintf("%d|%s|%s|%s", r.Rule.Port, r.Rule.Protocol, r.Rule.Action, r.Rule.Chain)
-
-			if existing, ok := merged[key]; ok {
-				// 合并 source_ips
-				existing.SourceIPs = append(existing.SourceIPs, r.Rule.SourceIPs...)
-				merged[key] = existing
-			} else {
-				merged[key] = r.Rule
-			}
-		}
-	}
-
-	// 转回数组
-	result := make([]model.Rule, 0, len(merged))
-	for _, r := range merged {
-		result = append(result, r)
-	}
-	return result
-}
-
-func (m *FWManager) ruleExists(r model.Rule) bool {
-	_, ok := m.index[utils.IndexKey(r)]
-	return ok
-}
-
 // 获取缓存中对应规则的Type
 func (m *FWManager) getRuleType(r model.Rule) string {
-	if rules, ok := m.cache[r.Port]; ok {
+	if rules, ok := m.cache.cache[r.Port]; ok {
 		for _, rule := range rules {
 			if utils.IsSameRule(r, rule.Rule) {
 				return rule.Type

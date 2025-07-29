@@ -16,8 +16,7 @@ import (
 )
 
 type UFWManager struct {
-	cache map[int][]model.Rule
-	index map[string]struct{}
+	cache *RuleCache[model.Rule]
 	sync.RWMutex
 }
 
@@ -39,8 +38,7 @@ func UFWAvailable() bool {
 
 func NewUFWManager() (*UFWManager, error) {
 	m := &UFWManager{
-		cache: make(map[int][]model.Rule),
-		index: make(map[string]struct{}),
+		cache: NewRuleCache[model.Rule](),
 	}
 	if err := m.loadRules(); err != nil {
 		logs.Error("[ufw] 加载规则失败", zap.Error(err))
@@ -48,14 +46,13 @@ func NewUFWManager() (*UFWManager, error) {
 	}
 	// 启动时自动恢复 JSON 中的规则
 	//if err := m.autoRestoreRules(); err != nil {
-	//	zap.L().Error("[ufw] 启动时规则恢复失败", zap.Error(err))
+	//	logs.Error("[ufw] 启动时规则恢复失败", zap.Error(err))
 	//}
 	return m, nil
 }
 
 func (m *UFWManager) loadRules() error {
-	m.cache = make(map[int][]model.Rule) // 确保每次重新加载前清空
-	m.index = make(map[string]struct{})
+	m.cache = NewRuleCache[model.Rule]() // 确保每次重新加载前清空
 
 	out, err := exec.Command("ufw", "status", "numbered").Output()
 	if err != nil {
@@ -67,7 +64,7 @@ func (m *UFWManager) loadRules() error {
 	m.Lock()
 	defer m.Unlock()
 	for _, r := range rules {
-		m.addToCache(r)
+		m.cache.Add(r, utils.IndexKey(r))
 	}
 	logs.Info("[ufw] 规则已加载", zap.Any("rules", rules))
 	return nil
@@ -92,7 +89,7 @@ func (m *UFWManager) autoRestoreRules() error {
 
 	// 加载当前系统规则，避免重复添加
 	for _, r := range savedRules {
-		if !m.ruleExists(r) {
+		if !m.cache.Exists(utils.IndexKey(r)) {
 			// 构造 RuleRequest 并添加
 			req := model.RuleRequest(r)
 			if err = m.AddRule(context.Background(), req); err != nil {
@@ -117,32 +114,11 @@ func (m *UFWManager) DeleteRule(ctx context.Context, req model.RuleRequest) erro
 }
 
 func (m *UFWManager) EditRule(ctx context.Context, edit model.EditRuleRequest) error {
-	rule, err := requestToRule(edit.Old)
-	if err != nil {
-		logs.Error("[ufw] 转换规则失败", zap.Error(err))
-		return err
-	}
-	for _, ip := range rule.SourceIPs {
-		singleRule := rule
-		singleRule.SourceIPs = []string{ip}
-		if !m.ruleExists(singleRule) {
-			return fmt.Errorf("[ufw] 编辑的规则不存在")
-		}
-	}
-	if err := m.DeleteRule(ctx, edit.Old); err != nil {
-		return err
-	}
-	if err := m.AddRule(ctx, edit.New); err != nil {
-		return err
-	}
-	logs.InfoCtx(ctx, "[iptables] 编辑规则",
-		zap.Any("oldRule", edit.Old),
-		zap.Any("newRule", edit.New))
-	return nil
+	return m.cache.EditRuleGeneric(ctx, edit, m.DeleteRule, m.AddRule, m.Type())
 }
 
 func (m *UFWManager) ListRule() []model.Rule {
-	rules := m.cacheToRules()
+	rules := m.cache.ToRules()
 	return rules
 }
 
@@ -174,7 +150,7 @@ func (m *UFWManager) Type() string {
 func (m *UFWManager) SaveRules() error {
 	m.RLock()
 	defer m.RUnlock()
-	if err := m.saveRulesToFileUnlocked(); err != nil {
+	if err := m.cache.saveRulesToFileUnlocked(common.UFWRulesFile); err != nil {
 		logs.Error("[ufw] 保存规则失败", zap.Error(err))
 		return err
 	}
@@ -197,12 +173,10 @@ func (m *UFWManager) applyRules(ctx context.Context, req model.RuleRequest, meth
 		singleRule.SourceIPs = []string{ip}
 
 		if !utils.IsValidIP(singleRule.SourceIPs[0]) {
-			logs.ErrorCtx(ctx, fmt.Sprintf("[ufw] %s规则失败，无效的IP地址", method),
-				zap.Any("rule", singleRule))
 			return fmt.Errorf("[ufw] %s规则失败，无效的IP地址: %s", method, ip)
 		}
 
-		exists := m.ruleExists(singleRule)
+		exists := m.cache.Exists(utils.IndexKey(singleRule))
 		if (method == common.Add && exists) || (method == common.Delete && !exists) {
 			continue
 		}
@@ -231,17 +205,17 @@ func (m *UFWManager) applyRules(ctx context.Context, req model.RuleRequest, meth
 	defer m.Unlock()
 	if method == common.Add {
 		for _, r := range processedRules {
-			m.addToCache(r)
+			m.cache.Add(r, utils.IndexKey(r))
 		}
 	} else {
-		m.removeRuleFromCache(processedRules)
+		m.cache.Remove(processedRules)
 	}
 
 	logs.InfoCtx(ctx, fmt.Sprintf("[ufw] %s规则成功", method), zap.Any("rules", processedRules))
 	return nil
 }
 
-func (m *UFWManager) saveRulesToFileUnlocked() error {
+/*func (m *UFWManager) saveRulesToFileUnlocked() error {
 	rules := m.cacheToRules()
 	data, err := json.MarshalIndent(rules, "", "  ")
 	if err != nil {
@@ -314,7 +288,7 @@ func (m *UFWManager) cacheToRules() []model.Rule {
 		result = append(result, r)
 	}
 	return result
-}
+}*/
 
 func buildUFWCommandArgs(rule model.Rule, action, method string) ([]string, error) {
 	ip := rule.SourceIPs[0]

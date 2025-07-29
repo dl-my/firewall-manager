@@ -1,6 +1,7 @@
 package firewall
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"firewall-manager/common/common"
@@ -16,21 +17,9 @@ import (
 )
 
 type IptablesManager struct {
-	cache map[int][]model.IptablesRule // key: port 例如 3306
-	index map[string]string
+	cache *RuleCache[model.IptablesRule]
+	raws  map[string]string // key: IndexKey -> raw rule string
 	sync.RWMutex
-}
-
-func NewIptablesManager() (*IptablesManager, error) {
-	m := &IptablesManager{
-		cache: make(map[int][]model.IptablesRule),
-		index: make(map[string]string),
-	}
-	// 启动时加载本机现有规则
-	if err := m.loadRules(); err != nil {
-		return nil, err
-	}
-	return m, nil
 }
 
 // IPTAvailable 检查iptables是否可用
@@ -39,13 +28,26 @@ func IPTAvailable() bool {
 	return err == nil
 }
 
+func NewIptablesManager() (*IptablesManager, error) {
+	m := &IptablesManager{
+		cache: NewRuleCache[model.IptablesRule](),
+		raws:  make(map[string]string),
+	}
+	// 启动时加载本机现有规则
+	if err := m.loadRules(); err != nil {
+		logs.Error("[iptables] 加载规则失败", zap.Error(err))
+		return nil, err
+	}
+	return m, nil
+}
+
 // LoadRules 拉取系统现有规则到内存
 func (m *IptablesManager) loadRules() error {
 	m.Lock()
 	defer m.Unlock()
 
-	m.cache = make(map[int][]model.IptablesRule) // 确保每次重新加载前清空
-	m.index = make(map[string]string)
+	m.cache = NewRuleCache[model.IptablesRule]() // 确保每次重新加载前清空
+	m.raws = make(map[string]string)
 
 	lines, err := fetchSystemRules()
 	if err != nil {
@@ -54,10 +56,12 @@ func (m *IptablesManager) loadRules() error {
 
 	rules := utils.IptablesParseRules(lines)
 	for _, r := range rules {
-		m.addToCache(r)
+		key := utils.IndexKey(r.Rule)
+		m.cache.Add(r, key)
+		m.raws[key] = r.Raw
 	}
 
-	logs.Info("[iptables] 规则已加载", zap.Any("rules", m.cacheToRules()))
+	logs.Info("[iptables] 规则已加载", zap.Any("rules", m.cache.ToRules()))
 	return nil
 }
 
@@ -81,11 +85,10 @@ func (m *IptablesManager) autoRestoreRules() error {
 
 	// 加载当前系统规则，避免重复添加
 	for _, r := range savedRules {
-		if m.ruleExists(r.Rule) {
-			continue
+		if !m.cache.Exists(utils.IndexKey(r.Rule)) {
+			addedRules = append(addedRules, r)
+			rulesBatch = append(rulesBatch, r.Raw)
 		}
-		rulesBatch = append(rulesBatch, r.Raw)
-		addedRules = append(addedRules, r)
 	}
 	// 如果没有新规则需要添加，直接返回
 	if len(rulesBatch) == 0 {
@@ -101,7 +104,9 @@ func (m *IptablesManager) autoRestoreRules() error {
 	m.Lock()
 	defer m.Unlock()
 	for _, r := range addedRules {
-		m.addToCache(r)
+		key := utils.IndexKey(r.Rule)
+		m.cache.Add(r, key)
+		m.raws[key] = r.Raw
 		logs.Info("[iptables] 恢复规则成功", zap.Any("rule", r.Rule))
 	}
 	logs.Info("[iptables] 规则恢复完成")
@@ -109,130 +114,34 @@ func (m *IptablesManager) autoRestoreRules() error {
 }
 
 func (m *IptablesManager) AddRule(ctx context.Context, req model.RuleRequest) error {
-	rule := model.Rule(req)
-	var addedRules []model.IptablesRule
-	var rulesBatch []string
-
-	// 生成所有待添加的规则
-	for _, ip := range rule.SourceIPs {
-		singleRule := rule
-		singleRule.SourceIPs = []string{ip}
-
-		if !utils.IsValidIP(singleRule.SourceIPs[0]) {
-			logs.ErrorCtx(ctx, "[iptables] 添加规则失败，无效的IP地址",
-				zap.Any("rule", singleRule))
-			return fmt.Errorf("[iptables] 添加规则失败，无效的IP地址: %s", ip)
-		}
-
-		if m.ruleExists(singleRule) {
-			continue
-		}
-
-		raw := buildIptablesRule(singleRule)
-		rulesBatch = append(rulesBatch, raw)
-		addedRules = append(addedRules, model.IptablesRule{Rule: singleRule, Raw: raw})
-	}
-
-	// 如果没有新规则需要添加，直接返回
-	if len(rulesBatch) == 0 {
-		return nil
-	}
-
-	if err := applyRulesWithIptablesRestore(rulesBatch); err != nil {
-		logs.ErrorCtx(ctx, "[iptables] 批量添加规则失败", zap.Error(err))
-		return err
-	}
-
-	// 更新缓存
-	m.Lock()
-	defer m.Unlock()
-	for _, r := range addedRules {
-		m.addToCache(r)
-		logs.InfoCtx(ctx, "[iptables] 添加规则成功", zap.Any("rule", r.Rule))
-	}
-
-	return nil
+	return m.applyRules(ctx, req, common.Add)
 }
 
 func (m *IptablesManager) DeleteRule(ctx context.Context, req model.RuleRequest) error {
-	rule := model.Rule(req)
-	var deletedRules []model.IptablesRule
-	var deleteBatch []string
-
-	// 找到所有需要删除的规则
-	for _, ip := range rule.SourceIPs {
-		singleRule := rule
-		singleRule.SourceIPs = []string{ip}
-
-		if !utils.IsValidIP(singleRule.SourceIPs[0]) {
-			logs.ErrorCtx(ctx, "[iptables] 删除规则失败，无效的IP地址",
-				zap.Any("rule", singleRule))
-			return fmt.Errorf("[iptables] 删除规则失败，无效的IP地址: %s", ip)
-		}
-
-		if !m.ruleExists(singleRule) {
-			continue
-		}
-
-		raw := m.index[utils.IndexKey(singleRule)]
-		deleteBatch = append(deleteBatch, strings.Replace(raw, "-A", "-D", 1))
-		deletedRules = append(deletedRules, model.IptablesRule{Rule: singleRule, Raw: raw})
-	}
-
-	// 如果没有规则需要删除
-	if len(deleteBatch) == 0 {
-		return nil
-	}
-
-	// 使用 iptables-restore 批量删除
-	if err := applyRulesWithIptablesRestore(deleteBatch); err != nil {
-		logs.ErrorCtx(ctx, "[iptables] 批量删除规则失败", zap.Error(err))
-		return err
-	}
-
-	// 从缓存中移除
-	m.Lock()
-	defer m.Unlock()
-	m.removeRuleFromCache(deletedRules)
-
-	// 日志
-	for _, r := range deletedRules {
-		logs.InfoCtx(ctx, "[iptables] 删除规则成功", zap.Any("rule", r.Rule))
-	}
-
-	return nil
+	return m.applyRules(ctx, req, common.Delete)
 }
 
 func (m *IptablesManager) EditRule(ctx context.Context, edit model.EditRuleRequest) error {
-	rule := model.Rule(edit.Old)
-	for _, ip := range rule.SourceIPs {
-		singleRule := rule
-		singleRule.SourceIPs = []string{ip}
-		if !m.ruleExists(singleRule) {
-			return fmt.Errorf("[iptables] 编辑规则不存在: %+v", singleRule)
-		}
-	}
-	if err := m.DeleteRule(ctx, edit.Old); err != nil {
-		return err
-	}
-	if err := m.AddRule(ctx, edit.New); err != nil {
-		return err
-	}
-	logs.InfoCtx(ctx, "[iptables] 编辑规则",
-		zap.Any("oldRule", edit.Old),
-		zap.Any("newRule", edit.New))
-	return nil
+	return m.cache.EditRuleGeneric(ctx, edit, m.DeleteRule, m.AddRule, m.Type())
 }
 
 func (m *IptablesManager) ListRule() []model.Rule {
-	allRules := m.cacheToRules()
+	allRules := m.cache.ToRules()
 	return allRules
 }
 
 func (m *IptablesManager) SaveRules() error {
 	m.Lock()
 	defer m.Unlock()
-	if err := m.saveRulesToFileUnlocked(); err != nil {
+	out, err := exec.Command("iptables-save").Output()
+	if err != nil {
+		logs.Error("[iptables] 规则保存失败", zap.Error(err))
+		return err
+	}
+	if err := os.WriteFile("./rules.v4", out, 0644); err != nil {
+		return err
+	}
+	if err := m.cache.saveRulesToFileUnlocked(common.IptablesRulesFile); err != nil {
 		return err
 	}
 	logs.Info("[iptables] 规则保存成功",
@@ -254,7 +163,72 @@ func (m *IptablesManager) Reload() error {
 	return m.loadRules()
 }
 
-func (m *IptablesManager) addToCache(rule model.IptablesRule) {
+// applyRules 统一的规则增删方法
+func (m *IptablesManager) applyRules(ctx context.Context, req model.RuleRequest, method string) error {
+	rule := model.Rule(req)
+	var processedRules []model.IptablesRule
+	var processedBatch []string
+
+	// 找到所有需要操作的规则
+	for _, ip := range rule.SourceIPs {
+		singleRule := rule
+		singleRule.SourceIPs = []string{ip}
+		var raw string
+
+		if !utils.IsValidIP(singleRule.SourceIPs[0]) {
+			return fmt.Errorf("[iptables] 删除规则失败，无效的IP地址: %s", ip)
+		}
+		key := utils.IndexKey(singleRule)
+		exists := m.cache.Exists(key)
+		if (method == common.Add && exists) || (method == common.Delete && !exists) {
+			continue
+		}
+
+		if method == common.Add {
+			// 检查链是否存在
+			if _, err := chainExists(singleRule.Chain); err != nil {
+				logs.ErrorCtx(ctx, "[iptables] 添加规则失败", zap.String("链不存在", singleRule.Chain), zap.Error(err))
+				return fmt.Errorf("[iptables] %v", err)
+			}
+			raw = buildIptablesRule(singleRule)
+		} else {
+			raw = strings.Replace(m.raws[key], "-A", "-D", 1)
+		}
+
+		processedBatch = append(processedBatch, raw)
+		processedRules = append(processedRules, model.IptablesRule{Rule: singleRule, Raw: raw})
+	}
+
+	// 如果没有规则需要操作
+	if len(processedBatch) == 0 {
+		return nil
+	}
+
+	// 使用 iptables-restore 批量操作
+	if err := applyRulesWithIptablesRestore(processedBatch); err != nil {
+		logs.ErrorCtx(ctx, fmt.Sprintf("[iptables] 批量%s规则失败", method), zap.Error(err))
+		return err
+	}
+
+	// 从缓存中移除
+	m.Lock()
+	defer m.Unlock()
+	if method == common.Add {
+		for _, r := range processedRules {
+			key := utils.IndexKey(r.Rule)
+			m.cache.Add(r, key)
+			m.raws[key] = r.Raw
+		}
+	} else {
+		m.cache.Remove(processedRules)
+	}
+
+	logs.InfoCtx(ctx, fmt.Sprintf("[iptables] %s规则成功", method), zap.Any("rules", processedRules))
+
+	return nil
+}
+
+/*func (m *IptablesManager) addToCache(rule model.IptablesRule) {
 	port := rule.Rule.Port
 	m.cache[port] = append(m.cache[port], rule)
 	m.index[utils.IndexKey(rule.Rule)] = rule.Raw
@@ -339,7 +313,7 @@ func (m *IptablesManager) saveRulesToFileUnlocked() error {
 		return err
 	}
 	return os.WriteFile(common.IptablesRulesFile, data, 0644)
-}
+}*/
 
 func fetchSystemRules() ([]string, error) {
 	out, err := exec.Command("iptables", "-S").Output()
@@ -356,7 +330,7 @@ func buildIptablesRule(rule model.Rule) string {
 		ipFlag = "-d"
 	}
 	return fmt.Sprintf("-A %s %s %s -p %s -m %s --dport %d -m conntrack --ctstate NEW,UNTRACKED -j %s",
-		rule.Chain, ipFlag, targetIP, rule.Protocol, rule.Protocol, rule.Port, rule.Action)
+		rule.Chain, ipFlag, targetIP, rule.Protocol, rule.Protocol, rule.Port, strings.ToUpper(rule.Action))
 }
 
 // 批量执行 iptables-restore
@@ -370,8 +344,32 @@ func applyRulesWithIptablesRestore(rules []string) error {
 	}
 	builder.WriteString("COMMIT\n")
 
-	cmd := exec.Command(common.IptablesRestorePath, "--noflush")
+	cmd := exec.Command(common.IptablesRestorePath, "--noflush", "--verbose")
 	cmd.Stdin = strings.NewReader(builder.String())
 
-	return cmd.Run()
+	// 捕获stderr错误信息
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	// 执行命令
+	err := cmd.Run()
+	if err != nil {
+		// 整合所有可能的错误信息
+		return fmt.Errorf("iptables-restore 执行失败: %w, 详细错误输出(stderr): %s, 执行的规则内容:%s",
+			err, stderr.String(), builder.String())
+	}
+	return nil
+}
+
+func chainExists(chain string) (bool, error) {
+	cmd := exec.Command(common.IptablesPath, "-L", chain)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		return false, fmt.Errorf("检查链失败: %w, stderr: %s", err, stderr.String())
+	}
+
+	return true, nil
 }

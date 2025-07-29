@@ -26,3 +26,15 @@ type EditRuleRequest struct {
 	Old RuleRequest `json:"old"`
 	New RuleRequest `json:"new"`
 }
+
+func (r Rule) GetRule() Rule {
+	return r
+}
+
+func (r FWRule) GetRule() Rule {
+	return r.Rule
+}
+
+func (r IptablesRule) GetRule() Rule {
+	return r.Rule
+}
